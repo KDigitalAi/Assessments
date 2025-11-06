@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skill Assessment | Skill Capital</title>
+    <!-- Google Fonts - Poppins & Inter (Skill Capital Design System) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+
+    <div class="main-container">
+        <!-- Skill Assessment Header -->
+        <div class="page-header">            
+            <div class="header-content">
+                <h1 class="page-title">
+                    <img src="/static/assets/logo.png" alt="Skill Capital" class="header-logo">
+                    Skill Capital
+                </h1>
+                <p class="page-subtitle">Test your skill with AI</p>
+            </div>
+        </div>
+
+        <!-- Skill Assessment Center Card -->
+        <section class="assessment-center-card">
+            <h2 class="center-title">Skill Assessment Center</h2>
+            <p class="center-description">Test your knowledge, track your progress, and identify areas for improvement with AI-powered adaptive assessments.</p>
+            <div class="center-stats">
+                <div class="stat-item">
+                    <span class="stat-icon">👤</span>
+                    <span id="totalAssessmentsStat">0</span> Assessments Completed
+                </div>
+                <div class="stat-item">
+                    <span class="stat-icon">📊</span>
+                    Avg Score: <span id="avgScoreStat">0%</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Your Courses Section -->
+        <section class="assessments-section">
+            <h2 class="section-title">Your Courses</h2>
+            <div id="coursesList" class="assessments-grid"></div>
+        </section>
+
+        <!-- Skill Progress and Competency Map (Two Column Layout) -->
+        <div class="charts-container">
+            <section class="skill-progress-section">
+                <h2 class="section-title">
+                    <span class="section-icon">📊</span> Skill Progress
+                </h2>
+                <div id="skillProgressChart" class="chart-container">
+                    <canvas id="progressChart"></canvas>
+                </div>
+            </section>
+
+            <section class="competency-map-section">
+                <h2 class="section-title">
+                    <span class="section-icon">🎯</span> Competency Map
+                </h2>
+                <div id="competencyMapChart" class="chart-container">
+                    <canvas id="radarChart"></canvas>
+                </div>
+            </section>
+        </div>
+
+        <!-- Recent Assessments Section -->
+        <section class="recent-assessments-section">
+            <div class="section-header">
+                <h2 class="section-title">
+                    <span class="section-icon">🕐</span> Recent Assessments
+                </h2>
+                <button class="btn-view-all">View All</button>
+            </div>
+            <div id="recentAssessmentsList" class="recent-assessments-list"></div>
+        </section>
+
+        <!-- Assessment Questions (Hidden by default) -->
+        <section id="questionsSection" class="questions-section" style="display: none;">
+            <h2>Assessment Questions</h2>
+            <div class="timer-info">
+                <p>Time Remaining: <span id="timeRemaining">--:--</span></p>
+                <p>Question <span id="currentQuestionNum">1</span> of <span id="totalQuestions">0</span></p>
+            </div>
+            <div id="questionsContainer"></div>
+            <div class="actions">
+                <button onclick="submitAssessment()" class="btn-primary">Submit Assessment</button>
+                <button onclick="cancelAssessment()" class="btn-secondary">Cancel</button>
+            </div>
+        </section>
+
+        <!-- Results Section (Hidden by default) -->
+        <section id="resultsSection" class="results-section" style="display: none;">
+            <h2>Assessment Results</h2>
+            <div id="resultsContent"></div>
+            <button onclick="resetAssessment()" class="btn-primary">Start New Assessment</button>
+        </section>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

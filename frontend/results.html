@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Assessment Results - Skill Assessment</title>
+    <!-- Google Fonts - Poppins & Inter (Skill Capital Design System) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+    <style>
+        body {
+            font-family: 'Poppins', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+        .results-container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        .results-header {
+            text-align: center;
+            margin-bottom: 2rem;
+            padding-bottom: 2rem;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        .score-display {
+            font-size: 4rem;
+            font-weight: bold;
+            margin: 1rem 0;
+        }
+        .score-passed {
+            color: #E5005B;
+        }
+        .score-failed {
+            color: #E5005B;
+        }
+        .results-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin: 2rem 0;
+        }
+        .info-card {
+            background: linear-gradient(135deg, #FFF5F8 0%, #FFE5ED 100%);
+            padding: 1.5rem;
+            border-radius: 12px;
+            text-align: center;
+            border: 1px solid rgba(229, 0, 91, 0.1);
+            box-shadow: 0 2px 8px rgba(229, 0, 91, 0.08);
+        }
+        .info-card-label {
+            color: #666666;
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+        .info-card-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #E5005B;
+        }
+        .actions {
+            margin-top: 3rem;
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+        }
+        .btn-primary {
+            background: #E5005B;
+            color: #fff;
+            border: none;
+            padding: 1rem 2rem;
+            font-size: 1.1rem;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 8px rgba(229, 0, 91, 0.2);
+        }
+        .btn-primary:hover {
+            background: #C2004A;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(229, 0, 91, 0.3);
+        }
+        .btn-secondary {
+            background: white;
+            color: #E5005B;
+            border: 2px solid #E5005B;
+            padding: 1rem 2rem;
+            font-size: 1rem;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            transition: all 0.3s ease;
+        }
+        .btn-secondary:hover {
+            background: #E5005B;
+            color: white;
+            transform: translateY(-2px);
+        }
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+        }
+        .feedback-section {
+            margin: 2.5rem 0;
+        }
+        .feedback-card {
+            background: linear-gradient(135deg, #FFF5F8 0%, #FFE5ED 100%);
+            border: 1px solid rgba(229, 0, 91, 0.2);
+            border-radius: 16px;
+            padding: 2rem;
+            box-shadow: 0 4px 20px rgba(229, 0, 91, 0.1);
+        }
+        .feedback-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 1.5rem;
+        }
+        .feedback-icon {
+            font-size: 2rem;
+        }
+        .feedback-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #222222;
+            margin: 0;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .feedback-content {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            border: 1px solid rgba(229, 0, 91, 0.1);
+        }
+        .feedback-text {
+            font-size: 1.1rem;
+            line-height: 1.7;
+            color: #222222;
+            margin: 0;
+            font-weight: 400;
+        }
+    </style>
+</head>
+<body>
+    <div class="results-container">
+        <div class="results-header">
+            <h1>Assessment Results</h1>
+            <div id="scoreDisplay" class="score-display">--</div>
+            <div id="scoreMessage" style="font-size: 1.2rem; margin-top: 1rem;"></div>
+        </div>
+
+        <div id="errorMessage" style="display: none;"></div>
+        
+        <div id="resultsContent">
+            <div class="results-info">
+                <div class="info-card">
+                    <div class="info-card-label">Score</div>
+                    <div class="info-card-value" id="scoreValue">-- / --</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-card-label">Correct Answers</div>
+                    <div class="info-card-value" id="correctCount">-- / --</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-card-label">Percentage</div>
+                    <div class="info-card-value" id="percentageScore">--%</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Personalized Feedback Section -->
+        <div id="feedbackSection" class="feedback-section" style="display: none;">
+            <div class="feedback-card">
+                <div class="feedback-header">
+                    <span class="feedback-icon">🎯</span>
+                    <h2 class="feedback-title">Personalized Feedback</h2>
+                </div>
+                <div class="feedback-content">
+                    <p id="feedbackText" class="feedback-text"></p>
+                </div>
+            </div>
+        </div>
+
+        <div class="actions">
+            <a href="/" class="btn-primary">Back to Dashboard</a>
+            <a href="/static/assessment.html" class="btn-secondary" style="display: none;" id="retakeBtn">Retake Assessment</a>
+        </div>
+    </div>
+
+    <script>
+        // Load results from localStorage
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('🔍 Loading results page...');
+            
+            try {
+                // Try both keys for compatibility
+                let storedResults = localStorage.getItem('assessmentResults');
+                if (!storedResults) {
+                    storedResults = localStorage.getItem('result_data');
+                }
+                
+                if (!storedResults) {
+                    console.error('❌ No results found in localStorage');
+                    showError('No results found. Please complete an assessment first.');
+                    return;
+                }
+
+                console.log('✅ Found results in localStorage:', storedResults.substring(0, 100) + '...');
+                
+                const results = JSON.parse(storedResults);
+                console.log('✅ Result data loaded:', results);
+                
+                displayResults(results);
+                
+                // Clear results from localStorage after successful display
+                localStorage.removeItem('assessmentResults');
+                localStorage.removeItem('result_data');
+                
+                console.log('✅ Results displayed successfully');
+                
+            } catch (error) {
+                console.error('❌ Error loading results:', error);
+                console.error('Error details:', error.stack);
+                showError('Failed to load results: ' + error.message);
+            }
+        });
+
+        function displayResults(data) {
+            console.log(' Displaying results:', data);
+            
+            if (!data || !data.success) {
+                console.error('❌ Invalid result data:', data);
+                showError(data?.error || data?.detail || 'Failed to load results');
+                return;
+            }
+
+            const percentage = parseFloat(data.percentage_score || 0).toFixed(1);
+            const passed = data.passed || false;
+            const score = data.score || 0;
+            const maxScore = data.max_score || 0;
+            const correctCount = data.correct_count || 0;
+            const totalQuestions = data.total_questions || 0;
+
+            console.log(`📈 Score: ${score}/${maxScore} (${percentage}%) - ${passed ? 'Passed' : 'Failed'}`);
+
+            // Update score display
+            const scoreDisplay = document.getElementById('scoreDisplay');
+            if (scoreDisplay) {
+                scoreDisplay.textContent = `${percentage}%`;
+                scoreDisplay.className = `score-display ${passed ? 'score-passed' : 'score-failed'}`;
+            }
+
+            // Update score message with feedback
+            const scoreMessage = document.getElementById('scoreMessage');
+            if (scoreMessage) {
+                let feedbackMessage = '';
+                if (percentage >= 80) {
+                    feedbackMessage = ' Excellent work!';
+                } else if (percentage >= 60) {
+                    feedbackMessage = ' Good effort! Keep practicing.';
+                } else {
+                    feedbackMessage = ' Needs improvement. Review your weak areas.';
+                }
+                scoreMessage.textContent = feedbackMessage;
+                scoreMessage.style.color = '#E5005B';
+            }
+
+            // Update info cards
+            const scoreValueEl = document.getElementById('scoreValue');
+            const correctCountEl = document.getElementById('correctCount');
+            const percentageScoreEl = document.getElementById('percentageScore');
+            
+            if (scoreValueEl) {
+                scoreValueEl.textContent = `${score} / ${maxScore}`;
+            }
+            if (correctCountEl) {
+                correctCountEl.textContent = `${correctCount} / ${totalQuestions}`;
+            }
+            if (percentageScoreEl) {
+                percentageScoreEl.textContent = `${percentage}%`;
+            }
+            
+            // Display detailed results if available
+            if (data.results && Array.isArray(data.results) && data.results.length > 0) {
+                displayDetailedResults(data.results);
+            }
+            
+            // Display personalized feedback (always show feedback)
+            const feedbackText = data.feedback || "Great effort! Keep improving and you'll get even better results next time.";
+            displayFeedback(feedbackText);
+        }
+        
+        function displayFeedback(feedbackText) {
+            const feedbackSection = document.getElementById('feedbackSection');
+            const feedbackTextEl = document.getElementById('feedbackText');
+            
+            if (feedbackSection && feedbackTextEl) {
+                feedbackTextEl.textContent = feedbackText;
+                feedbackSection.style.display = 'block';
+            }
+        }
+        
+        function displayDetailedResults(results) {
+            console.log('📝 Displaying detailed results for', results.length, 'questions');
+            
+            const resultsContent = document.getElementById('resultsContent');
+            if (!resultsContent) {
+                console.warn('⚠️  resultsContent element not found');
+                return;
+            }
+            
+            // Create detailed results section
+            const detailsSection = document.createElement('div');
+            detailsSection.style.marginTop = '2rem';
+            detailsSection.innerHTML = '<h2 style="margin-bottom: 1rem; font-size: 1.5rem;">Question Details</h2>';
+            
+            const resultsList = document.createElement('div');
+            resultsList.style.display = 'flex';
+            resultsList.style.flexDirection = 'column';
+            resultsList.style.gap = '1rem';
+            
+            results.forEach((result, index) => {
+                const resultCard = document.createElement('div');
+                resultCard.style.padding = '1.5rem';
+                resultCard.style.border = `2px solid ${result.is_correct ? '#E5005B' : 'rgba(229, 0, 91, 0.3)'}`;
+                resultCard.style.borderRadius = '12px';
+                resultCard.style.backgroundColor = result.is_correct ? 'rgba(229, 0, 91, 0.05)' : 'rgba(229, 0, 91, 0.02)';
+                resultCard.style.marginBottom = '1rem';
+                
+                resultCard.innerHTML = `
+                    <h3 style="margin: 0 0 0.5rem 0; color: ${result.is_correct ? '#E5005B' : '#222222'}; font-size: 1.1rem; font-weight: 600;">
+                        Question ${index + 1}: ${result.is_correct ? '✅ Correct' : '❌ Incorrect'}
+                    </h3>
+                    <p style="margin: 0.5rem 0; font-weight: 500; font-size: 1rem;">${result.question_text || 'Question text not available'}</p>
+                    <p style="margin: 0.5rem 0;"><strong>Your Answer:</strong> ${result.selected_option || 'Not answered'}</p>
+                    <p style="margin: 0.5rem 0;"><strong>Correct Answer:</strong> ${result.correct_answer || 'Not available'}</p>
+                    ${result.explanation ? `<p style="margin: 0.5rem 0; font-style: italic; color: #666;">${result.explanation}</p>` : ''}
+                `;
+                
+                resultsList.appendChild(resultCard);
+            });
+            
+            detailsSection.appendChild(resultsList);
+            resultsContent.appendChild(detailsSection);
+            
+            console.log('✅ Detailed results displayed');
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.style.display = 'block';
+            errorDiv.className = 'error-message';
+            errorDiv.textContent = message;
+        }
+    </script>
+</body>
+</html>
+

@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Course Assessments - Skill Assessment</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <style>
+        .assessments-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        .assessments-header {
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #e0e0e0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .assessments-header h1 {
+            margin: 0;
+            font-size: 2rem;
+        }
+        .btn-back {
+            background: transparent;
+            color: #666;
+            border: 1px solid #ccc;
+            padding: 0.75rem 1.5rem;
+            font-size: 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .btn-back:hover {
+            background: #f5f5f5;
+        }
+        .assessments-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+        .assessment-card {
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 1.5rem;
+            transition: box-shadow 0.2s;
+        }
+        .assessment-card:hover {
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+        .assessment-card h3 {
+            margin: 0 0 1rem 0;
+            color: #333;
+            font-size: 1.3rem;
+        }
+        .assessment-meta {
+            color: #666;
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+        }
+        .start-btn {
+            background: #000;
+            color: #fff;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            font-size: 1rem;
+            font-weight: 600;
+            border-radius: 6px;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 1rem;
+            transition: background 0.2s;
+        }
+        .start-btn:hover {
+            background: #333;
+        }
+        .start-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .loading {
+            text-align: center;
+            padding: 3rem;
+            font-size: 1.2rem;
+            color: #666;
+        }
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+        }
+        .difficulty-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            margin-bottom: 1rem;
+        }
+        .difficulty-easy {
+            background: #d4edda;
+            color: #155724;
+        }
+        .difficulty-medium {
+            background: #fff3cd;
+            color: #856404;
+        }
+        .difficulty-hard {
+            background: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <div class="assessments-container">
+        <div class="assessments-header">
+            <h1 id="courseTitle">Course Assessments</h1>
+            <a href="/" class="btn-back">← Back to Courses</a>
+        </div>
+
+        <div id="errorMessage" style="display: none;"></div>
+        <div id="assessmentsContainer" class="assessments-grid">
+            <div class="loading">Loading assessments...</div>
+        </div>
+    </div>
+
+    <script>
+        // API Configuration
+        const API_BASE_URL = 'http://127.0.0.1:8000/api';
+
+        // Get selected course from localStorage
+        const courseName = localStorage.getItem('selectedCourse');
+
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            if (!courseName) {
+                showError('No course selected. Please go back and select a course.');
+                return;
+            }
+
+            // Update page title
+            document.getElementById('courseTitle').textContent = `${courseName} Assessments`;
+            
+            // Load assessments for this course
+            loadAssessments();
+        });
+
+        async function loadAssessments() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/assessments/by_course/${encodeURIComponent(courseName)}`);
+                
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
+                    throw new Error(errorData.detail || errorData.error || `Failed to fetch assessments: HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                if (!data.success) {
+                    throw new Error(data.error || data.detail || 'Failed to load assessments');
+                }
+
+                displayAssessments(data.assessments || []);
+                
+            } catch (error) {
+                console.error('Error loading assessments:', error);
+                showError('Error loading assessments: ' + (error.message || String(error)));
+            }
+        }
+
+        // Normalize assessment title function (for frontend deduplication as safety measure)
+        function normalizeAssessmentTitle(rawTitle) {
+            if (!rawTitle || typeof rawTitle !== 'string') {
+                return 'Untitled Assessment';
+            }
+            
+            // Convert to lowercase and trim
+            let title = rawTitle.trim().toLowerCase();
+            
+            // Remove .pdf anywhere in the title (not just at the end)
+            title = title.replace(/\.pdf/g, '');
+            
+            // Replace underscores and hyphens with spaces
+            title = title.replace(/[_-]/g, ' ');
+            
+            // Remove double spaces and trim
+            title = title.split(/\s+/).filter(word => word.length > 0).join(' ');
+            
+            // Remove standalone "pdf" word (e.g., "html pdf assessment" -> "html assessment")
+            let words = title.split(/\s+/);
+            const filteredWords = words.filter(word => word.toLowerCase() !== 'pdf');
+            
+            if (filteredWords.length === 0) {
+                return 'Untitled Assessment';
+            }
+            
+            // Capitalize each word using the filtered words
+            const normalizedWords = filteredWords.map(word => {
+                if (word.length === 0) return '';
+                return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+            });
+            
+            return normalizedWords.join(' ');
+        }
+
+        function displayAssessments(assessments) {
+            const container = document.getElementById('assessmentsContainer');
+            
+            if (!assessments || assessments.length === 0) {
+                container.innerHTML = '<div class="error-message">No assessments available for this course.</div>';
+                return;
+            }
+
+            // Frontend deduplication (safety measure - backend should already deduplicate)
+            const seenTitles = new Set();
+            const uniqueAssessments = [];
+            
+            assessments.forEach(assessment => {
+                const rawTitle = assessment.title || assessment.original_title || assessment.skill_name || 'Assessment';
+                const normalizedTitle = normalizeAssessmentTitle(rawTitle);
+                const titleKey = normalizedTitle.toLowerCase();
+                
+                // Skip if we've already seen this normalized title
+                if (seenTitles.has(titleKey)) {
+                    console.log(`Skipping duplicate assessment: '${rawTitle}' (normalized: '${normalizedTitle}')`);
+                    return;
+                }
+                
+                // Mark as seen and add to unique list
+                seenTitles.add(titleKey);
+                uniqueAssessments.push({
+                    ...assessment,
+                    displayTitle: normalizedTitle  // Use normalized title for display
+                });
+            });
+
+            if (uniqueAssessments.length === 0) {
+                container.innerHTML = '<div class="error-message">No unique assessments available for this course.</div>';
+                return;
+            }
+
+            container.innerHTML = uniqueAssessments.map(assessment => {
+                const difficulty = assessment.difficulty || 'medium';
+                const difficultyClass = `difficulty-${difficulty}`;
+                const displayTitle = assessment.displayTitle || assessment.title || assessment.skill_name || 'Assessment';
+                
+                return `
+                    <div class="assessment-card">
+                        <span class="difficulty-badge ${difficultyClass}">${difficulty.toUpperCase()}</span>
+                        <h3>${displayTitle}</h3>
+                        <div class="assessment-meta">
+                            <span>${assessment.question_count || 10} questions</span>
+                            <span> • </span>
+                            <span>${assessment.duration_minutes || 30} min</span>
+                        </div>
+                        <button class="start-btn" onclick="startAssessment('${assessment.id}', '${assessment.skill_name || courseName}', ${assessment.question_count || 10})">
+                            Start Assessment
+                        </button>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function startAssessment(assessmentId, skillName, numQuestions) {
+            try {
+                // Show loading state
+                const button = event?.target;
+                if (button) {
+                    button.disabled = true;
+                    button.textContent = 'Loading...';
+                }
+
+                console.log(`Starting assessment: ${assessmentId}`);
+                
+                // Fetch questions from backend
+                const response = await fetch(`${API_BASE_URL}/assessments/${assessmentId}/questions`);
+                
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
+                    throw new Error(errorData.detail || errorData.error || `Failed to fetch questions: HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                console.log('Assessment data received:', data);
+
+                // Validate response
+                if (!data.success) {
+                    throw new Error(data.error || data.detail || 'Failed to start assessment');
+                }
+
+                if (!data.questions || data.questions.length === 0) {
+                    throw new Error('No questions found for this assessment');
+                }
+
+                // Store assessment data in localStorage
+                const assessmentData = {
+                    assessment_id: data.assessment_id || assessmentId,
+                    attempt_id: data.attempt_id || null,
+                    title: data.title || skillName,
+                    questions: data.questions,
+                    duration_minutes: data.duration_minutes || 30,
+                    started_at: data.started_at || new Date().toISOString()
+                };
+                
+                localStorage.setItem('currentAssessment', JSON.stringify(assessmentData));
+                
+                // Also store attempt_id separately for reliability
+                if (data.attempt_id) {
+                    localStorage.setItem('attempt_id', data.attempt_id);
+                    console.log('✅ Attempt ID stored separately:', data.attempt_id);
+                } else {
+                    console.warn('⚠️  No attempt_id in response:', data);
+                }
+                
+                console.log('✅ Assessment data stored in localStorage');
+                
+                // Redirect to assessment page
+                console.log('Redirecting to assessment page...');
+                window.location.href = '/static/assessment.html';
+                
+            } catch (error) {
+                console.error('Error starting assessment:', error);
+                
+                // Re-enable button
+                const button = event?.target;
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = 'Start Assessment';
+                }
+                
+                // Show user-friendly error message
+                alert(`Error starting assessment: ${error.message || 'Unknown error'}\n\nCheck the browser console for more details.`);
+            }
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.style.display = 'block';
+            errorDiv.className = 'error-message';
+            errorDiv.textContent = message;
+        }
+    </script>
+</body>
+</html>
+
