@@ -5,14 +5,19 @@ python-multipart==0.0.6
 jinja2>=3.1.0
 
 # Database and Storage
-supabase>=2.22.0,<3.0.0
+# FIX: Pin supabase to stable version 2.8.0 to avoid proxy parameter error
+# Version 2.22.2 has compatibility issues - Client.__init__() got unexpected 'proxy' argument
+# Version 2.8.0 is stable and compatible with httpx 0.26+
+supabase==2.8.0
 psycopg2-binary==2.9.9
 
 # OpenAI (for embeddings and question generation)
 openai>=1.12.0,<2.0.0
 
 # HTTP Requests
-# Note: httpx version is managed by supabase dependency
+# FIX: Pin httpx to <0.27 to avoid proxy parameter error with supabase 2.8.0
+# httpx 0.27+ has compatibility issues with supabase 2.8.0
+httpx>=0.24,<0.27
 requests==2.31.0
 
 # Configuration and Environment

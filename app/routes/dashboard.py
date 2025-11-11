@@ -58,13 +58,36 @@ async def get_assessments():
                 detail="Database service unavailable"
             )
         
-        # Get all published assessments
-        assessments_response = client.table("assessments")\
-            .select("*")\
-            .eq("status", "published")\
-            .execute()
-        
-        assessments = assessments_response.data if assessments_response.data else []
+        # Get all assessments (include published, active, draft, and NULL/empty status)
+        # This ensures assessments are shown even if status column wasn't properly set
+        try:
+            # First, try to get all assessments without status filter
+            all_assessments_response = client.table("assessments")\
+                .select("*")\
+                .execute()
+            
+            all_assessments = all_assessments_response.data if all_assessments_response.data else []
+            
+            # Filter to include: published, active, draft, NULL, empty, or any other status
+            # Only exclude explicitly "archived" or "deleted" assessments
+            assessments = [
+                a for a in all_assessments
+                if a.get("status") not in ("archived", "deleted")
+            ]
+            
+            # If we still have no assessments, include everything (safety fallback)
+            if not assessments and all_assessments:
+                logger.warning("No assessments matched status filter, including all assessments")
+                assessments = all_assessments
+                
+        except Exception as e:
+            logger.error(f"Error fetching assessments: {str(e)}")
+            # Fallback: try original query
+            assessments_response = client.table("assessments")\
+                .select("*")\
+                .eq("status", "published")\
+                .execute()
+            assessments = assessments_response.data if assessments_response.data else []
         
         # Normalize domain name function
         def normalize_domain(raw_name: str) -> str:
@@ -130,40 +153,49 @@ async def get_assessments():
                 grouped_courses[skill]["unique_sources"].add(str(assessment_id))
         
         # Query embeddings tables to get actual unique source counts per course
+        # Note: These tables may not exist, so we wrap in try-except
         try:
-            # Get all unique video sources
-            video_response = client.table("video_embeddings")\
-                .select("video_id, video_title")\
-                .execute()
+            # Get all unique video sources (if table exists)
+            try:
+                video_response = client.table("video_embeddings")\
+                    .select("video_id, video_title")\
+                    .execute()
+                
+                video_sources = {}
+                if video_response.data:
+                    for row in video_response.data:
+                        video_id = row.get("video_id")
+                        video_title = row.get("video_title", "")
+                        if video_id:
+                            # Normalize video title to match course names
+                            normalized_video_title = normalize_domain(video_title)
+                            if normalized_video_title not in video_sources:
+                                video_sources[normalized_video_title] = set()
+                            video_sources[normalized_video_title].add(video_id)
+            except Exception as video_error:
+                logger.debug(f"video_embeddings table not available or error: {str(video_error)}")
+                video_sources = {}
             
-            video_sources = {}
-            if video_response.data:
-                for row in video_response.data:
-                    video_id = row.get("video_id")
-                    video_title = row.get("video_title", "")
-                    if video_id:
-                        # Normalize video title to match course names
-                        normalized_video_title = normalize_domain(video_title)
-                        if normalized_video_title not in video_sources:
-                            video_sources[normalized_video_title] = set()
-                        video_sources[normalized_video_title].add(video_id)
-            
-            # Get all unique PDF sources
-            pdf_response = client.table("pdf_embeddings")\
-                .select("pdf_id, pdf_title")\
-                .execute()
-            
-            pdf_sources = {}
-            if pdf_response.data:
-                for row in pdf_response.data:
-                    pdf_id = row.get("pdf_id")
-                    pdf_title = row.get("pdf_title", "")
-                    if pdf_id:
-                        # Normalize PDF title to match course names
-                        normalized_pdf_title = normalize_domain(pdf_title)
-                        if normalized_pdf_title not in pdf_sources:
-                            pdf_sources[normalized_pdf_title] = set()
-                        pdf_sources[normalized_pdf_title].add(pdf_id)
+            # Get all unique PDF sources (if table exists)
+            try:
+                pdf_response = client.table("pdf_embeddings")\
+                    .select("pdf_id, pdf_title")\
+                    .execute()
+                
+                pdf_sources = {}
+                if pdf_response.data:
+                    for row in pdf_response.data:
+                        pdf_id = row.get("pdf_id")
+                        pdf_title = row.get("pdf_title", "")
+                        if pdf_id:
+                            # Normalize PDF title to match course names
+                            normalized_pdf_title = normalize_domain(pdf_title)
+                            if normalized_pdf_title not in pdf_sources:
+                                pdf_sources[normalized_pdf_title] = set()
+                            pdf_sources[normalized_pdf_title].add(pdf_id)
+            except Exception as pdf_error:
+                logger.debug(f"pdf_embeddings table not available or error: {str(pdf_error)}")
+                pdf_sources = {}
             
             # Update unique source counts for each course
             for skill, course_info in grouped_courses.items():
@@ -1161,18 +1193,40 @@ async def get_progress():
         test_user_id = get_test_user_id()
         
         # Build query - filter by test user if available, otherwise get all completed attempts
-        query = client.table("attempts")\
-            .select("*, results(*), assessments(skill_domain, title)")\
-            .eq("status", "completed")\
-            .order("completed_at", desc=True)
-        
-        # Filter by test user if available (for single-user mode)
-        if test_user_id:
-            query = query.eq("user_id", str(test_user_id))
-        
-        attempts_response = query.limit(50).execute()
-        
-        attempts = attempts_response.data if attempts_response.data else []
+        # Note: Join queries may fail if foreign keys aren't set up, so we handle errors gracefully
+        try:
+            # Try with join query first (more efficient if relationships exist)
+            query = client.table("attempts")\
+                .select("*, results(*), assessments(skill_domain, title)")\
+                .eq("status", "completed")\
+                .order("completed_at", desc=True)
+            
+            # Filter by test user if available (for single-user mode)
+            if test_user_id:
+                query = query.eq("user_id", str(test_user_id))
+            
+            attempts_response = query.limit(50).execute()
+            attempts = attempts_response.data if attempts_response.data else []
+        except Exception as join_error:
+            # Fallback: query without joins if foreign key relationships don't exist
+            logger.warning(f"Join query failed, trying without joins: {str(join_error)}")
+            try:
+                query = client.table("attempts")\
+                    .select("*")\
+                    .eq("status", "completed")\
+                    .order("completed_at", desc=True)
+                
+                if test_user_id:
+                    query = query.eq("user_id", str(test_user_id))
+                
+                attempts_response = query.limit(50).execute()
+                attempts = attempts_response.data if attempts_response.data else []
+                
+                # Manually fetch related data if needed
+                # (This is a simplified fallback - you may need to adjust based on your schema)
+            except Exception as fallback_error:
+                logger.error(f"Failed to fetch attempts even without joins: {str(fallback_error)}")
+                attempts = []
         
         # Calculate stats
         total_assessments = len(attempts)
@@ -1181,29 +1235,66 @@ async def get_progress():
         recent_assessments = []
         
         for attempt in attempts[:10]:  # Recent 10
+            # Handle results - could be a dict, list, or None depending on join success
             result = attempt.get("results")
             if result:
                 if isinstance(result, list) and result:
                     result = result[0]
+                elif not isinstance(result, dict):
+                    result = None
+            
+            # Handle assessments - could be a dict, list, or None depending on join success
+            assessment_data = attempt.get("assessments")
+            if assessment_data:
+                if isinstance(assessment_data, list) and assessment_data:
+                    assessment_data = assessment_data[0]
+                elif not isinstance(assessment_data, dict):
+                    assessment_data = None
+            
+            # If we don't have assessment data from join, try to get it from assessment_id
+            if not assessment_data and attempt.get("assessment_id"):
+                try:
+                    assessment_response = client.table("assessments")\
+                        .select("skill_domain, title")\
+                        .eq("id", str(attempt.get("assessment_id")))\
+                        .limit(1)\
+                        .execute()
+                    if assessment_response.data:
+                        assessment_data = assessment_response.data[0]
+                except Exception:
+                    assessment_data = None
+            
+            # If we don't have result data from join, try to get it from attempt_id
+            if not result and attempt.get("id"):
+                try:
+                    result_response = client.table("results")\
+                        .select("*")\
+                        .eq("attempt_id", str(attempt.get("id")))\
+                        .limit(1)\
+                        .execute()
+                    if result_response.data:
+                        result = result_response.data[0]
+                except Exception:
+                    result = None
+            
+            if result and result.get("percentage_score") is not None:
+                score = result["percentage_score"]
+                scores.append(score)
                 
-                if result and result.get("percentage_score") is not None:
-                    score = result["percentage_score"]
-                    scores.append(score)
-                    
-                    skill = attempt.get("assessments", {}).get("skill_domain") if attempt.get("assessments") else "Unknown"
-                    if skill not in skill_scores:
-                        skill_scores[skill] = []
-                    skill_scores[skill].append(score)
-                    
-                    # Recent assessments
-                    recent_assessments.append({
-                        "id": attempt.get("id"),
-                        "skill_name": skill,
-                        "title": attempt.get("assessments", {}).get("title") if attempt.get("assessments") else skill,
-                        "score": score,
-                        "max_score": 100,
-                        "date": attempt.get("completed_at", attempt.get("started_at")),
-                        "duration_minutes": attempt.get("duration_minutes", 30)
+                skill = assessment_data.get("skill_domain") if assessment_data else attempt.get("skill_domain", "Unknown")
+                if skill not in skill_scores:
+                    skill_scores[skill] = []
+                skill_scores[skill].append(score)
+                
+                # Recent assessments
+                recent_assessments.append({
+                    "id": attempt.get("id"),
+                    "skill_name": skill,
+                    "title": assessment_data.get("title") if assessment_data else skill,
+                    "score": score,
+                    "max_score": 100,
+                    "date": attempt.get("completed_at", attempt.get("started_at")),
+                    "duration_minutes": attempt.get("duration_minutes", 30)
                     })
         
         avg_score = sum(scores) / len(scores) if scores else 0
