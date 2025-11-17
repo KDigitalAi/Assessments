@@ -15,18 +15,12 @@ document.addEventListener('DOMContentLoaded', () => {
     loadProgress();
     loadRecentAssessments();
     
-    // Initialize charts after a small delay to ensure canvas elements exist
-    setTimeout(() => {
-        initializeCharts();
-    }, 100);
-    
-    // Auto-refresh charts periodically (every 30 seconds) when on dashboard
-    // This ensures charts update when new assessments are completed
+    // Auto-refresh data periodically (every 30 seconds) when on dashboard
     setInterval(() => {
         refreshChartData();
     }, 30000); // 30 seconds
     
-    // Refresh charts when page becomes visible (user returns from results page)
+    // Refresh data when page becomes visible (user returns from results page)
     document.addEventListener('visibilitychange', () => {
         if (!document.hidden) {
             refreshChartData();
@@ -48,11 +42,24 @@ async function refreshChartData() {
         if (data.success) {
             // Update stats
             document.getElementById('totalAssessmentsStat').textContent = data.total_assessments || 0;
-            document.getElementById('avgScoreStat').textContent = (data.avg_score || 0) + '%';
             
-            // Update charts with fresh data
-            if (data.skill_progress || data.competency_scores) {
-                updateCharts(data.skill_progress, data.competency_scores);
+            // Format average score with proper decimal handling
+            const avgScore = data.avg_score !== undefined && data.avg_score !== null ? parseFloat(data.avg_score) : 0;
+            const formattedAvg = avgScore.toFixed(1);
+            document.getElementById('avgScoreStat').textContent = formattedAvg + '%';
+            
+            // Debug logging
+            if (avgScore === 0 && (data.total_assessments || 0) > 0) {
+                console.warn('Average score is 0 but assessments exist. Data:', {
+                    total_assessments: data.total_assessments,
+                    avg_score: data.avg_score,
+                    recent_assessments: data.recent_assessments
+                });
+            }
+            
+            // Update topic mastery
+            if (data.topic_mastery) {
+                displayTopicMastery(data.topic_mastery);
             }
             
             // Update recent assessments list
@@ -554,11 +561,24 @@ async function loadProgress() {
 
         if (data.success) {
             document.getElementById('totalAssessmentsStat').textContent = data.total_assessments || 0;
-            document.getElementById('avgScoreStat').textContent = (data.avg_score || 0) + '%';
             
-            // Update charts if data available
-            if (data.skill_progress || data.competency_scores) {
-                updateCharts(data.skill_progress, data.competency_scores);
+            // Format average score with proper decimal handling
+            const avgScore = data.avg_score !== undefined && data.avg_score !== null ? parseFloat(data.avg_score) : 0;
+            const formattedAvg = avgScore.toFixed(1);
+            document.getElementById('avgScoreStat').textContent = formattedAvg + '%';
+            
+            // Debug logging
+            if (avgScore === 0 && (data.total_assessments || 0) > 0) {
+                console.warn('Average score is 0 but assessments exist. Data:', {
+                    total_assessments: data.total_assessments,
+                    avg_score: data.avg_score,
+                    recent_assessments: data.recent_assessments
+                });
+            }
+            
+            // Update topic mastery
+            if (data.topic_mastery) {
+                displayTopicMastery(data.topic_mastery);
             }
         }
     } catch (error) {
@@ -620,414 +640,74 @@ function displayRecentAssessments(recentAssessments) {
     }).join('');
 }
 
-// Review assessment - fetch result data and navigate to results page
-async function reviewAssessment(attemptId, event) {
+// Review assessment - navigate to results page
+function reviewAssessment(attemptId, event) {
     if (!attemptId) {
         console.error('❌ No attempt_id provided for review');
-        alert('Error: Cannot review assessment. Attempt ID is missing.');
         return;
     }
     
     console.log('🔍 Reviewing assessment attempt:', attemptId);
     
-    // Get button element for loading state
-    const button = event?.target || document.querySelector(`button[onclick*="${attemptId}"]`);
-    
-    try {
-        // Show loading state
-        if (button) {
-            button.disabled = true;
-            button.textContent = 'Loading...';
-        }
-        
-        // Fetch result data from backend
-        const response = await fetch(`${API_BASE_URL}/attempts/${attemptId}/result`);
-        
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
-            throw new Error(errorData.detail || errorData.error || `Failed to fetch result: HTTP ${response.status}`);
-        }
-        
-        const data = await response.json();
-        
-        if (!data.success) {
-            throw new Error(data.error || data.detail || 'Failed to fetch result data');
-        }
-        
-        console.log('✅ Result data fetched successfully:', data);
-        
-        // Store result data in localStorage for results page
-        localStorage.setItem('assessmentResults', JSON.stringify(data));
-        localStorage.setItem('result_data', JSON.stringify(data)); // Also store as result_data for compatibility
-        
-        // Navigate to results page
-        window.location.href = '/static/results.html';
-        
-    } catch (error) {
-        console.error('❌ Error reviewing assessment:', error);
-        alert(`Error loading assessment result: ${error.message || 'Unknown error'}\n\nCheck the browser console for more details.`);
-        
-        // Re-enable button
-        if (button) {
-            button.disabled = false;
-            button.textContent = 'Review';
-        }
+    // Prevent event propagation
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
     }
+    
+    // Redirect to results page with attempt_id in URL
+    window.location.href = `/static/results.html?attempt_id=${attemptId}`;
 }
 
-// Chart instances
-let progressChartInstance = null;
-let radarChartInstance = null;
-
-// Initialize Charts with Chart.js
-function initializeCharts() {
-    // Wait for Chart.js to be available
-    if (typeof Chart === 'undefined') {
-        console.warn('Chart.js not loaded yet, retrying...');
-        setTimeout(initializeCharts, 200);
+// Display Topic Mastery Scorecard
+function displayTopicMastery(topicMastery) {
+    const container = document.getElementById('topicMasteryList');
+    
+    if (!container) {
+        console.warn('Topic mastery container not found');
         return;
     }
     
-    // Skill Progress Bar Chart
-    const progressCtx = document.getElementById('progressChart');
-    if (progressCtx) {
-        // Use mock data initially
-        const mockSkillData = getMockSkillProgressData();
-        progressChartInstance = createBarChart(progressCtx, mockSkillData);
-    } else {
-        console.warn('Progress chart canvas not found');
+    if (!topicMastery || topicMastery.length === 0) {
+        container.innerHTML = '<p class="no-topics-message">No topic data available. Complete assessments to see your mastery scores.</p>';
+        return;
     }
     
-    // Competency Map Radar Chart
-    const radarCtx = document.getElementById('radarChart');
-    if (radarCtx) {
-        // Use mock data initially
-        const mockCompetencyData = getMockCompetencyData();
-        radarChartInstance = createRadarChart(radarCtx, mockCompetencyData);
-    } else {
-        console.warn('Radar chart canvas not found');
-    }
-}
-
-// Create Bar Chart using Chart.js
-function createBarChart(canvasElement, data) {
-    if (!canvasElement || typeof Chart === 'undefined') {
-        console.warn('Chart.js not available or canvas element not found');
-        return null;
-    }
-    
-    const ctx = canvasElement.getContext('2d');
-    
-    // Destroy existing chart if it exists
-    if (progressChartInstance) {
-        progressChartInstance.destroy();
-    }
-    
-    return new Chart(ctx, {
-        type: 'bar',
-        data: {
-            labels: data.labels,
-            datasets: [
-                {
-                    label: 'Your Level',
-                    data: data.userScores,
-                    backgroundColor: '#E5005B',
-                    borderColor: '#E5005B',
-                    borderWidth: 2,
-                    borderRadius: 6
-                },
-                {
-                    label: 'Target/Market',
-                    data: data.targetScores,
-                    backgroundColor: '#E0E0E0',
-                    borderColor: '#D0D0D0',
-                    borderWidth: 2,
-                    borderRadius: 6
-                }
-            ]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            animation: {
-                duration: 1000,
-                easing: 'easeInOutQuart'
-            },
-                scales: {
-                y: {
-                    beginAtZero: true,
-                    max: 100,
-                    ticks: {
-                        stepSize: 25,
-                        color: '#666666',
-                        font: {
-                            family: 'Poppins, Inter, sans-serif',
-                            weight: 500
-                        }
-                    },
-                    grid: {
-                        color: '#E0E0E0',
-                        lineWidth: 1
-                    }
-                },
-                x: {
-                    ticks: {
-                        color: '#666666',
-                        maxRotation: 45,
-                        minRotation: 45,
-                        font: {
-                            family: 'Poppins, Inter, sans-serif',
-                            weight: 500
-                        }
-                    },
-                    grid: {
-                        display: false
-                    }
-                }
-            },
-            plugins: {
-                legend: {
-                    display: false
-                },
-                tooltip: {
-                    backgroundColor: 'rgba(34, 34, 34, 0.95)',
-                    padding: 16,
-                    titleFont: {
-                        family: 'Poppins, Inter, sans-serif',
-                        size: 14,
-                        weight: 600
-                    },
-                    bodyFont: {
-                        family: 'Poppins, Inter, sans-serif',
-                        size: 13,
-                        weight: 500
-                    },
-                    titleColor: '#FFFFFF',
-                    bodyColor: '#FFFFFF',
-                    borderColor: '#E5005B',
-                    borderWidth: 2,
-                    cornerRadius: 8,
-                    displayColors: true,
-                    boxPadding: 8
-                }
-            }
-        }
-    });
-}
-
-// Create Radar Chart using Chart.js
-function createRadarChart(canvasElement, data) {
-    if (!canvasElement || typeof Chart === 'undefined') {
-        console.warn('Chart.js not available or canvas element not found');
-        return null;
-    }
-    
-    const ctx = canvasElement.getContext('2d');
-    
-    // Destroy existing chart if it exists
-    if (radarChartInstance) {
-        radarChartInstance.destroy();
-    }
-    
-    return new Chart(ctx, {
-        type: 'radar',
-        data: {
-            labels: data.labels,
-            datasets: [
-                {
-                    label: 'Competency Level',
-                    data: data.values,
-                    backgroundColor: 'rgba(229, 0, 91, 0.1)',
-                    borderColor: '#E5005B',
-                    borderWidth: 2,
-                    pointBackgroundColor: '#E5005B',
-                    pointBorderColor: '#ffffff',
-                    pointHoverBackgroundColor: '#ffffff',
-                    pointHoverBorderColor: '#E5005B',
-                    pointRadius: 5,
-                    pointHoverRadius: 7
-                }
-            ]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            animation: {
-                duration: 1000,
-                easing: 'easeInOutQuart'
-            },
-                scales: {
-                r: {
-                    beginAtZero: true,
-                    max: 100,
-                    ticks: {
-                        stepSize: 25,
-                        color: '#666666',
-                        backdropColor: 'transparent',
-                        font: {
-                            family: 'Poppins, Inter, sans-serif',
-                            weight: 500
-                        }
-                    },
-                    grid: {
-                        color: '#E0E0E0',
-                        lineWidth: 1
-                    },
-                    pointLabels: {
-                        color: '#222222',
-                        font: {
-                            family: 'Poppins, Inter, sans-serif',
-                            size: 13,
-                            weight: 600
-                        }
-                    }
-                }
-            },
-            plugins: {
-                legend: {
-                    display: false
-                },
-                tooltip: {
-                    backgroundColor: 'rgba(34, 34, 34, 0.95)',
-                    padding: 16,
-                    titleFont: {
-                        family: 'Poppins, Inter, sans-serif',
-                        size: 14,
-                        weight: 600
-                    },
-                    bodyFont: {
-                        family: 'Poppins, Inter, sans-serif',
-                        size: 13,
-                        weight: 500
-                    },
-                    titleColor: '#FFFFFF',
-                    bodyColor: '#FFFFFF',
-                    borderColor: '#E5005B',
-                    borderWidth: 2,
-                    cornerRadius: 8,
-                    displayColors: true,
-                    boxPadding: 8
-                }
-            }
-        }
-    });
-}
-
-// Get mock skill progress data (fallback when backend data unavailable)
-function getMockSkillProgressData() {
-    return {
-        labels: ['React', 'JavaScript', 'TypeScript', 'Problem Solving', 'Communication', 'Teamwork'],
-        userScores: [75, 80, 60, 70, 68, 78],
-        targetScores: [90, 95, 78, 80, 78, 82]
-    };
-}
-
-// Get mock competency data (fallback when backend data unavailable)
-function getMockCompetencyData() {
-    return {
-        labels: ['Technical Skills', 'Problem Solving', 'Communication', 'Collaboration', 'Learning Ability'],
-        values: [85, 70, 60, 75, 80]
-    };
-}
-
-// Update charts with real backend data
-function updateCharts(skillProgress, competencyScores) {
-    // Update Skill Progress Bar Chart
-    if (skillProgress && Object.keys(skillProgress).length > 0) {
-        const skillData = transformSkillProgressData(skillProgress);
-        if (progressChartInstance && skillData) {
-            progressChartInstance.data.labels = skillData.labels;
-            progressChartInstance.data.datasets[0].data = skillData.userScores;
-            progressChartInstance.data.datasets[1].data = skillData.targetScores;
-            progressChartInstance.update('active');
-        } else if (document.getElementById('progressChart')) {
-            progressChartInstance = createBarChart(document.getElementById('progressChart'), skillData);
-        }
-    } else {
-        // Use mock data if no real data available
-        const mockData = getMockSkillProgressData();
-        if (progressChartInstance) {
-            progressChartInstance.data.labels = mockData.labels;
-            progressChartInstance.data.datasets[0].data = mockData.userScores;
-            progressChartInstance.data.datasets[1].data = mockData.targetScores;
-            progressChartInstance.update('active');
-        }
-    }
-    
-    // Update Competency Map Radar Chart
-    if (competencyScores && Object.keys(competencyScores).length > 0) {
-        const competencyData = transformCompetencyData(competencyScores);
-        if (radarChartInstance && competencyData) {
-            radarChartInstance.data.labels = competencyData.labels;
-            radarChartInstance.data.datasets[0].data = competencyData.values;
-            radarChartInstance.update('active');
-        } else if (document.getElementById('radarChart')) {
-            radarChartInstance = createRadarChart(document.getElementById('radarChart'), competencyData);
-        }
-    } else {
-        // Use mock data if no real data available
-        const mockData = getMockCompetencyData();
-        if (radarChartInstance) {
-            radarChartInstance.data.labels = mockData.labels;
-            radarChartInstance.data.datasets[0].data = mockData.values;
-            radarChartInstance.update('active');
-        }
-    }
-}
-
-// Transform backend skill progress data to chart format
-function transformSkillProgressData(skillProgress) {
-    const labels = [];
-    const userScores = [];
-    const targetScores = [];
-    
-    // Define all skills we want to show (in order) - matching screenshot
-    const allSkills = ['React', 'JavaScript', 'TypeScript', 'Problem Solving', 'Communication', 'Teamwork'];
-    
-    allSkills.forEach(skill => {
-        if (skillProgress[skill]) {
-            labels.push(skill);
-            userScores.push(skillProgress[skill].user_level || 0);
-            // Use target_level from backend if available, otherwise calculate
-            targetScores.push(skillProgress[skill].target_level || Math.min(100, (skillProgress[skill].user_level || 0) + 12));
+    container.innerHTML = topicMastery.map(topic => {
+        const percentage = Math.round(topic.percentage);
+        const correct = topic.correct || 0;
+        const total = topic.total || 0;
+        
+        // Determine color based on mastery level
+        let progressColor = '#E5005B'; // Default pink
+        if (percentage >= 80) {
+            progressColor = '#28a745'; // Green for high mastery
+        } else if (percentage >= 60) {
+            progressColor = '#ffc107'; // Yellow for medium mastery
+        } else if (percentage >= 40) {
+            progressColor = '#fd7e14'; // Orange for low-medium mastery
         } else {
-            // Include skill even if no data (with 0 scores and default target)
-            labels.push(skill);
-            userScores.push(0);
-            targetScores.push(0);
+            progressColor = '#dc3545'; // Red for low mastery
         }
-    });
-    
-    // If we have custom skills not in the list, add them at the end
-    Object.keys(skillProgress).forEach(skill => {
-        if (!allSkills.includes(skill)) {
-            labels.push(skill);
-            userScores.push(skillProgress[skill].user_level || 0);
-            targetScores.push(skillProgress[skill].target_level || Math.min(100, (skillProgress[skill].user_level || 0) + 12));
-        }
-    });
-    
-    return {
-        labels: labels,
-        userScores: userScores,
-        targetScores: targetScores
-    };
+        
+        return `
+            <div class="topic-mastery-item">
+                <div class="topic-mastery-header">
+                    <span class="topic-name">${topic.topic}</span>
+                    <span class="topic-percentage">${percentage}%</span>
+                </div>
+                <div class="topic-mastery-progress-bar">
+                    <div class="topic-mastery-progress-fill" style="width: ${percentage}%; background-color: ${progressColor};"></div>
+                </div>
+                <div class="topic-mastery-stats">
+                    <span class="topic-stats-text">${correct} / ${total} correct</span>
+                </div>
+            </div>
+        `;
+    }).join('');
 }
 
-// Transform backend competency data to chart format
-function transformCompetencyData(competencyScores) {
-    const labels = ['Technical Skills', 'Problem Solving', 'Communication', 'Collaboration', 'Learning Ability'];
-    const values = [];
-    
-    labels.forEach(label => {
-        values.push(competencyScores[label] || 0);
-    });
-    
-    return {
-        labels: labels,
-        values: values
-    };
-}
+
 
 // Utility Functions
 function showLoading(message) {

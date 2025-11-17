@@ -548,18 +548,10 @@ section {
 }
 
 /* ===================================================================
-   CHARTS CONTAINER (Skill Capital Style)
+   TOPIC MASTERY SCORECARD (Skill Capital Style)
    =================================================================== */
 
-.charts-container {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 24px;
-    margin-bottom: 40px;
-}
-
-.skill-progress-section,
-.competency-map-section {
+.topic-mastery-section {
     background: white;
     border: 1px solid var(--skill-capital-accent);
     border-radius: 16px;
@@ -568,27 +560,116 @@ section {
     transition: all 0.3s ease;
 }
 
-.skill-progress-section:hover,
-.competency-map-section:hover {
+.topic-mastery-section:hover {
     box-shadow: 0 4px 20px var(--skill-capital-shadow);
     transform: translateY(-2px);
 }
 
-.skill-progress-section .section-title,
-.competency-map-section .section-title {
-    margin-bottom: 24px;
-    font-size: 24px;
+.topic-mastery-section .section-title {
+    margin-bottom: 12px;
 }
 
-.chart-container {
-    position: relative;
-    height: 400px;
+.topic-mastery-subtitle {
+    color: var(--skill-capital-text-light);
+    font-size: 14px;
+    margin-bottom: 16px;
+}
+
+.topic-mastery-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    max-height: 400px;
+    overflow-y: auto;
+    padding-right: 8px;
+}
+
+.topic-mastery-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.topic-mastery-list::-webkit-scrollbar-track {
+    background: var(--skill-capital-light);
+    border-radius: 3px;
+}
+
+.topic-mastery-list::-webkit-scrollbar-thumb {
+    background: var(--skill-capital-accent);
+    border-radius: 3px;
+}
+
+.topic-mastery-list::-webkit-scrollbar-thumb:hover {
+    background: var(--skill-capital-primary);
+}
+
+.topic-mastery-item {
+    background: var(--skill-capital-light);
+    border-radius: 12px;
+    padding: 16px;
+    transition: all 0.3s ease;
+}
+
+.topic-mastery-item:hover {
+    background: #F0F0F0;
+    transform: translateX(4px);
+}
+
+.topic-mastery-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.topic-name {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--skill-capital-secondary);
+    flex: 1;
+}
+
+.topic-percentage {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--skill-capital-primary);
+    min-width: 50px;
+    text-align: right;
+}
+
+.topic-mastery-progress-bar {
     width: 100%;
+    height: 8px;
+    background: var(--skill-capital-accent);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 8px;
 }
 
-canvas {
-    max-width: 100%;
-    height: auto !important;
+.topic-mastery-progress-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.6s ease, background-color 0.3s ease;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.topic-mastery-stats {
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+}
+
+.topic-stats-text {
+    font-size: 12px;
+    color: var(--skill-capital-text-light);
+    font-weight: 500;
+}
+
+.no-topics-message {
+    text-align: center;
+    color: var(--skill-capital-text-light);
+    font-size: 14px;
+    padding: 40px 20px;
+    font-style: italic;
 }
 
 /* ===================================================================
@@ -959,8 +1040,7 @@ canvas {
         padding: 20px;
     }
     
-    .skill-progress-section,
-    .competency-map-section {
+    .topic-mastery-section {
         padding: 20px;
     }
     
@@ -986,8 +1066,7 @@ canvas {
 
 .assessment-card,
 .recent-assessment-card,
-.skill-progress-section,
-.competency-map-section {
+.topic-mastery-section {
     animation: fadeIn 0.5s ease-out;
 }
 

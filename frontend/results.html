@@ -203,40 +203,115 @@
     </div>
 
     <script>
-        // Load results from localStorage
-        document.addEventListener('DOMContentLoaded', () => {
+        const API_BASE_URL = 'http://127.0.0.1:8000/api';
+        
+        // Get attempt_id from URL parameters
+        function getUrlParameter(name) {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get(name);
+        }
+        
+        // Load results from URL parameter or localStorage
+        document.addEventListener('DOMContentLoaded', async () => {
             console.log('🔍 Loading results page...');
             
+            const attemptId = getUrlParameter('attempt_id');
+            
             try {
-                // Try both keys for compatibility
-                let storedResults = localStorage.getItem('assessmentResults');
-                if (!storedResults) {
-                    storedResults = localStorage.getItem('result_data');
-                }
-                
-                if (!storedResults) {
-                    console.error('❌ No results found in localStorage');
-                    showError('No results found. Please complete an assessment first.');
-                    return;
-                }
+                if (attemptId) {
+                    // Fetch result from API using attempt_id
+                    console.log('🔍 Fetching result for attempt_id:', attemptId);
+                    
+                    const response = await fetch(`${API_BASE_URL}/attempts/${attemptId}/result`);
+                    
+                    // Parse JSON response
+                    let data;
+                    try {
+                        data = await response.json();
+                        console.log('📦 Raw API response:', data);
+                    } catch (parseError) {
+                        console.error('❌ Failed to parse JSON response:', parseError);
+                        throw new Error(`Invalid response from server: HTTP ${response.status}`);
+                    }
+                    
+                    // Check if response is OK
+                    if (!response.ok) {
+                        // Handle error response
+                        const errorMessage = data?.detail || data?.error || data?.message || `HTTP ${response.status}: Failed to fetch result`;
+                        console.error('❌ API Error:', errorMessage);
+                        throw new Error(String(errorMessage));
+                    }
+                    
+                    // Check if data indicates success
+                    if (!data || !data.success) {
+                        const errorMsg = data?.error || data?.detail || 'Failed to fetch result data';
+                        console.error('❌ API returned success=false:', errorMsg);
+                        throw new Error(String(errorMsg));
+                    }
+                    
+                    console.log('✅ Result data fetched from API:', data);
+                    displayResults(data);
+                    
+                } else {
+                    // Fallback to localStorage for backward compatibility
+                    console.log('⚠️  No attempt_id in URL, checking localStorage...');
+                    
+                    let storedResults = localStorage.getItem('assessmentResults');
+                    if (!storedResults) {
+                        storedResults = localStorage.getItem('result_data');
+                    }
+                    
+                    if (!storedResults) {
+                        console.error('❌ No results found in localStorage or URL');
+                        showError('No results found. Please complete an assessment first.');
+                        return;
+                    }
 
-                console.log('✅ Found results in localStorage:', storedResults.substring(0, 100) + '...');
-                
-                const results = JSON.parse(storedResults);
-                console.log('✅ Result data loaded:', results);
-                
-                displayResults(results);
-                
-                // Clear results from localStorage after successful display
-                localStorage.removeItem('assessmentResults');
-                localStorage.removeItem('result_data');
+                    console.log('✅ Found results in localStorage:', storedResults.substring(0, 100) + '...');
+                    
+                    const results = JSON.parse(storedResults);
+                    console.log('✅ Result data loaded from localStorage:', results);
+                    
+                    displayResults(results);
+                    
+                    // Clear results from localStorage after successful display
+                    localStorage.removeItem('assessmentResults');
+                    localStorage.removeItem('result_data');
+                }
                 
                 console.log('✅ Results displayed successfully');
                 
             } catch (error) {
                 console.error('❌ Error loading results:', error);
-                console.error('Error details:', error.stack);
-                showError('Failed to load results: ' + error.message);
+                console.error('Error type:', typeof error);
+                console.error('Error details:', error);
+                
+                // Properly handle error message (could be string or object)
+                let errorMessage = 'Failed to load results';
+                if (error instanceof Error) {
+                    errorMessage = error.message;
+                } else if (typeof error === 'string') {
+                    errorMessage = error;
+                } else if (error && typeof error === 'object') {
+                    // Handle different error object formats
+                    if (error.message) {
+                        errorMessage = String(error.message);
+                    } else if (error.detail) {
+                        errorMessage = String(error.detail);
+                    } else if (error.error) {
+                        errorMessage = String(error.error);
+                    } else {
+                        // Last resort: try to stringify, but limit length
+                        try {
+                            const errorStr = JSON.stringify(error);
+                            errorMessage = errorStr.length > 200 ? errorStr.substring(0, 200) + '...' : errorStr;
+                        } catch (e) {
+                            errorMessage = 'Unknown error occurred';
+                        }
+                    }
+                }
+                
+                showError('Failed to load results: ' + errorMessage);
             }
         });
 

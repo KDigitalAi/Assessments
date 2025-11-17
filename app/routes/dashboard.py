@@ -18,11 +18,6 @@ feedback_service = FeedbackService()
 
 router = APIRouter(prefix="/api", tags=["Dashboard"])
 
-
-# ============================================
-# Request/Response Models
-# ============================================
-
 class StartAssessmentRequest(BaseModel):
     skill_name: str = Field(..., description="Skill name (e.g., 'React', 'JavaScript')")
     num_questions: int = Field(5, ge=5, le=30, description="Number of questions")
@@ -1021,21 +1016,30 @@ async def get_attempt_result(attempt_id: str):
             .execute()
         
         if not attempt_response.data or len(attempt_response.data) == 0:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Attempt not found: {attempt_id}"
-            )
+            logger.warning(f"Attempt not found: {attempt_id}")
+            return {
+                "success": False,
+                "error": "NO_RESULT_FOUND",
+                "detail": f"Attempt not found: {attempt_id}"
+            }
         
         attempt = attempt_response.data[0]
         result = attempt.get("results")
         if isinstance(result, list) and result:
             result = result[0]
         
+        # If no result exists, use attempt data as fallback
+        # This handles cases where result creation might have failed
         if not result:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"No result found for attempt: {attempt_id}"
-            )
+            logger.warning(f"No result found for attempt {attempt_id}, using attempt data as fallback")
+            # Create a virtual result from attempt data
+            result = {
+                "total_score": attempt.get("total_score", 0),
+                "max_score": attempt.get("max_score", 0),
+                "percentage_score": attempt.get("percentage_score", 0),
+                "passed": attempt.get("percentage_score", 0) >= 60 if attempt.get("percentage_score") else False,
+                "overall_feedback": None
+            }
         
         # Get all responses for this attempt
         responses_response = client.table("responses")\
@@ -1069,30 +1073,37 @@ async def get_attempt_result(attempt_id: str):
                 # Use answer_text if available, otherwise selected_option
                 answer_text = response.get("answer_text") or response.get("selected_option") or ""
                 
-                detailed_results.append({
+                # Build question details with all required fields
+                question_data = {
                     "question_id": question_id,
-                    "question_text": question.get("question", ""),
-                    "selected_option": answer_text,
+                    "question": question.get("question", ""),  # Primary field name
+                    "question_text": question.get("question", ""),  # Alias for compatibility
+                    "user_answer": answer_text,  # Primary field name
+                    "selected_option": answer_text,  # Alias for compatibility
                     "correct_answer": question.get("correct_answer", ""),
                     "is_correct": response.get("score", 0) > 0,
                     "explanation": question.get("explanation", ""),
-                    "options": question.get("options", [])
-                })
+                    "options": question.get("options", []) if question.get("options") else []
+                }
+                detailed_results.append(question_data)
         
         # Get assessment info
         assessment = attempt.get("assessments")
         if isinstance(assessment, dict):
             assessment_title = assessment.get("title", "Assessment")
             skill_domain = assessment.get("skill_domain", "Unknown")
+        elif isinstance(assessment, list) and assessment:
+            assessment_title = assessment[0].get("title", "Assessment")
+            skill_domain = assessment[0].get("skill_domain", "Unknown")
         else:
             assessment_title = "Assessment"
             skill_domain = "Unknown"
         
-        # Get feedback from result
+        # Get feedback from result (or attempt if result was virtual)
         feedback = result.get("overall_feedback")
         
         # If no feedback exists, generate it now
-        if not feedback:
+        if not feedback and detailed_results:
             try:
                 feedback = feedback_service.generate_feedback(
                     score=float(result.get("total_score", 0)),
@@ -1114,6 +1125,27 @@ async def get_attempt_result(attempt_id: str):
             except Exception as e:
                 logger.warning(f"Could not generate feedback: {str(e)}")
         
+        # Ensure feedback is always a string (never None)
+        if not feedback:
+            percentage = float(result.get("percentage_score", 0))
+            if percentage >= 80:
+                feedback = "Excellent work! You've demonstrated strong understanding of the material. Keep up the great effort!"
+            elif percentage >= 60:
+                feedback = "Good effort! You're on the right track. Continue practicing to improve your skills further."
+            else:
+                feedback = "Keep practicing! Review the areas where you struggled and try again. You'll improve with each attempt."
+        
+        # Calculate correct answers count
+        correct_count = sum(1 for r in detailed_results if r.get("is_correct"))
+        total_questions = len(detailed_results) if detailed_results else (result.get("max_score", 0) or attempt.get("max_score", 0))
+        
+        # Ensure we have valid question count
+        if total_questions == 0 and detailed_results:
+            total_questions = len(detailed_results)
+        elif total_questions == 0:
+            # Fallback: use max_score if available
+            total_questions = result.get("max_score", 0) or attempt.get("max_score", 0) or 1
+        
         return {
             "success": True,
             "attempt_id": attempt_id,
@@ -1123,14 +1155,17 @@ async def get_attempt_result(attempt_id: str):
             "score": float(result.get("total_score", 0)),
             "max_score": float(result.get("max_score", 0)),
             "percentage_score": float(result.get("percentage_score", 0)),
+            "percentage": float(result.get("percentage_score", 0)),  # Alias for compatibility
             "passed": result.get("passed", False),
-            "correct_count": sum(1 for r in detailed_results if r.get("is_correct")),
-            "total_questions": len(detailed_results),
+            "correct_count": correct_count,
+            "correct_answers": correct_count,  # Alias for compatibility
+            "total_questions": total_questions,
             "completed_at": attempt.get("completed_at"),
             "started_at": attempt.get("started_at"),
             "duration_minutes": attempt.get("duration_minutes", 30),
-            "feedback": feedback,  # Include feedback
-            "results": detailed_results
+            "feedback": feedback,  # Include feedback (always a string)
+            "results": detailed_results,
+            "questions": detailed_results  # Alias for compatibility
         }
         
     except HTTPException:
@@ -1180,33 +1215,59 @@ async def get_progress():
         skill_scores = {}
         recent_assessments = []
         
-        for attempt in attempts[:10]:  # Recent 10
-            result = attempt.get("results")
-            if result:
-                if isinstance(result, list) and result:
-                    result = result[0]
+        # Process ALL attempts to calculate accurate average
+        for attempt in attempts:
+            # Get percentage_score from attempt first (always stored there)
+            percentage_score = attempt.get("percentage_score")
+            
+            # Fallback to results table if not in attempt
+            if percentage_score is None:
+                result = attempt.get("results")
+                if result:
+                    if isinstance(result, list) and result:
+                        result = result[0]
+                    if isinstance(result, dict):
+                        percentage_score = result.get("percentage_score")
+            
+            # Use percentage_score if available, otherwise calculate from total_score/max_score
+            if percentage_score is None:
+                total_score = attempt.get("total_score")
+                max_score = attempt.get("max_score")
+                if total_score is not None and max_score is not None and max_score > 0:
+                    percentage_score = (total_score / max_score) * 100
+            
+            # Only add to scores if we have a valid percentage
+            if percentage_score is not None:
+                score = float(percentage_score)
+                scores.append(score)
                 
-                if result and result.get("percentage_score") is not None:
-                    score = result["percentage_score"]
-                    scores.append(score)
-                    
-                    skill = attempt.get("assessments", {}).get("skill_domain") if attempt.get("assessments") else "Unknown"
-                    if skill not in skill_scores:
-                        skill_scores[skill] = []
-                    skill_scores[skill].append(score)
-                    
-                    # Recent assessments
+                skill = attempt.get("assessments", {}).get("skill_domain") if attempt.get("assessments") else "Unknown"
+                if isinstance(attempt.get("assessments"), list) and attempt.get("assessments"):
+                    skill = attempt.get("assessments")[0].get("skill_domain", "Unknown")
+                
+                if skill not in skill_scores:
+                    skill_scores[skill] = []
+                skill_scores[skill].append(score)
+                
+                # Recent assessments (only for first 10)
+                if len(recent_assessments) < 10:
                     recent_assessments.append({
                         "id": attempt.get("id"),
                         "skill_name": skill,
-                        "title": attempt.get("assessments", {}).get("title") if attempt.get("assessments") else skill,
+                        "title": attempt.get("assessments", {}).get("title") if isinstance(attempt.get("assessments"), dict) and attempt.get("assessments") else (attempt.get("assessments")[0].get("title") if isinstance(attempt.get("assessments"), list) and attempt.get("assessments") else skill),
                         "score": score,
                         "max_score": 100,
                         "date": attempt.get("completed_at", attempt.get("started_at")),
                         "duration_minutes": attempt.get("duration_minutes", 30)
                     })
         
-        avg_score = sum(scores) / len(scores) if scores else 0
+        # Calculate average from ALL completed assessments
+        avg_score = round(sum(scores) / len(scores), 1) if scores else 0
+        
+        # Log for debugging
+        logger.info(f"Progress calculation: {total_assessments} completed attempts, {len(scores)} with valid scores, avg_score: {avg_score}")
+        if total_assessments > 0 and len(scores) == 0:
+            logger.warning(f"No valid scores found in {total_assessments} completed attempts. Sample attempt data: {attempts[0] if attempts else 'No attempts'}")
         
         # Calculate skill progress (for bar chart)
         # Map skill domains to standard skill names for consistent display
@@ -1251,39 +1312,84 @@ async def get_progress():
                 "attempts": len(skill_scores_list)
             }
         
-        # Calculate competency map (for radar chart)
-        # Map skills to competency categories
-        competency_categories = {
-            "Technical Skills": ["React", "JavaScript", "TypeScript", "Python", "Java"],
-            "Problem Solving": ["Problem Solving"],
-            "Communication": ["Communication"],
-            "Collaboration": ["Teamwork", "Communication & Collaboration"],
-            "Learning Ability": []  # Calculated from overall performance
-        }
+        # Calculate topic mastery from responses
+        # Get all responses for completed attempts and calculate mastery per topic
+        topic_mastery = {}
         
-        competency_scores = {}
-        for category, related_skills in competency_categories.items():
-            category_scores = []
-            if category == "Learning Ability":
-                # Learning ability is average of all skills
-                category_scores = scores if scores else []
-            else:
-                # Find scores for related skills
-                for skill, skill_scores_list in skill_scores.items():
-                    if any(related_skill.lower() in skill.lower() for related_skill in related_skills):
-                        category_scores.extend(skill_scores_list)
+        try:
+            # Get all attempt IDs for completed attempts
+            attempt_ids = [str(attempt.get("id")) for attempt in attempts]
             
-            if category_scores:
-                competency_scores[category] = int(sum(category_scores) / len(category_scores))
-            else:
-                competency_scores[category] = 0
+            if attempt_ids:
+                # Get all responses for these attempts
+                responses_response = client.table("responses")\
+                    .select("question_id, score, max_score")\
+                    .in_("attempt_id", attempt_ids)\
+                    .execute()
+                
+                responses = responses_response.data if responses_response.data else []
+                
+                if responses:
+                    # Get question IDs from responses
+                    question_ids = [str(r.get("question_id")) for r in responses if r.get("question_id")]
+                    
+                    if question_ids:
+                        # Get questions with topics
+                        questions_response = client.table("skill_assessment_questions")\
+                            .select("id, topic")\
+                            .in_("id", question_ids)\
+                            .execute()
+                        
+                        questions = questions_response.data if questions_response.data else []
+                        
+                        # Create a mapping of question_id to topic
+                        question_topic_map = {str(q.get("id")): q.get("topic", "Unknown") for q in questions}
+                        
+                        # Calculate mastery per topic
+                        for response in responses:
+                            question_id = str(response.get("question_id"))
+                            topic = question_topic_map.get(question_id, "Unknown")
+                            score = response.get("score", 0)
+                            max_score = response.get("max_score", 1)
+                            
+                            if topic not in topic_mastery:
+                                topic_mastery[topic] = {
+                                    "correct": 0,
+                                    "total": 0,
+                                    "percentage": 0
+                                }
+                            
+                            topic_mastery[topic]["total"] += 1
+                            if score > 0:
+                                topic_mastery[topic]["correct"] += 1
+                        
+                        # Calculate percentages
+                        for topic, data in topic_mastery.items():
+                            if data["total"] > 0:
+                                data["percentage"] = round((data["correct"] / data["total"]) * 100, 1)
+                            else:
+                                data["percentage"] = 0
+        except Exception as e:
+            logger.warning(f"Error calculating topic mastery: {str(e)}")
+            topic_mastery = {}
+        
+        # Sort topics by percentage (descending) for display
+        topic_mastery_list = [
+            {
+                "topic": topic,
+                "percentage": data["percentage"],
+                "correct": data["correct"],
+                "total": data["total"]
+            }
+            for topic, data in sorted(topic_mastery.items(), key=lambda x: x[1]["percentage"], reverse=True)
+        ]
         
         return {
             "success": True,
             "total_assessments": total_assessments,
             "avg_score": round(avg_score, 1),
             "skill_progress": skill_progress,
-            "competency_scores": competency_scores,
+            "topic_mastery": topic_mastery_list,
             "recent_assessments": recent_assessments[:5]  # Last 5
         }
         
