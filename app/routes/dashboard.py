@@ -439,17 +439,29 @@ async def get_assessment_questions(assessment_id: str):
             except:
                 pass
         
-        # Get questions
-        if question_ids:
-            # Get questions by IDs from blueprint
+        # Get questions - try multiple methods in order of preference
+        questions = []
+        
+        # Method 1: Get questions by assessment_id (primary method for generated assessments)
+        questions_response = client.table("skill_assessment_questions")\
+            .select("*")\
+            .eq("assessment_id", assessment_id)\
+            .order("created_at", desc=False)\
+            .execute()
+        
+        questions = questions_response.data if questions_response.data else []
+        
+        # Method 2: If no questions found by assessment_id, try blueprint question_ids
+        if not questions and question_ids:
             questions_response = client.table("skill_assessment_questions")\
                 .select("*")\
                 .in_("id", question_ids)\
                 .execute()
             
             questions = questions_response.data if questions_response.data else []
-        else:
-            # Get questions by topic
+        
+        # Method 3: Fallback to topic matching (for legacy assessments)
+        if not questions:
             skill_domain = assessment.get("skill_domain", "")
             question_count = assessment.get("question_count", 10)
             
