@@ -16,8 +16,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function autoStartAssessment() {
     try {
-        console.log('🔄 No assessment data found. Auto-starting assessment...');
-        
         // Show loading state
         document.getElementById('questionContainer').innerHTML = '<div class="loading">Loading assessment...</div>';
         
@@ -36,8 +34,6 @@ async function autoStartAssessment() {
         const firstAssessment = assessmentsData.assessments[0];
         const assessmentId = firstAssessment.id;
         
-        console.log(`✅ Found assessment: ${firstAssessment.skill_name} (ID: ${assessmentId})`);
-        
         // Step 3: Fetch questions and create attempt
         const questionsResponse = await fetch(`${API_BASE_URL}/assessments/${assessmentId}/questions`);
         if (!questionsResponse.ok) {
@@ -46,7 +42,6 @@ async function autoStartAssessment() {
         }
         
         const data = await questionsResponse.json();
-        console.log('✅ Assessment data received:', data);
         
         // Validate response
         if (!data.success) {
@@ -69,20 +64,12 @@ async function autoStartAssessment() {
         
         localStorage.setItem('currentAssessment', JSON.stringify(assessmentData));
         
-        // Also store attempt_id separately for reliability
         if (data.attempt_id) {
             localStorage.setItem('attempt_id', data.attempt_id);
-            console.log('✅ Attempt ID stored:', data.attempt_id);
         } else {
-            console.warn('⚠️  No attempt_id returned from server');
-            if (data.error) {
-                console.error('Server error:', data.error);
+            if (data.error || data.warning) {
+                assessmentData.warning = data.warning || data.error || 'No attempt created. Submission may fail.';
             }
-            if (data.warning) {
-                console.warn('Server warning:', data.warning);
-            }
-            // Store warning in assessment data so it can be shown
-            assessmentData.warning = data.warning || data.error || 'No attempt created. Submission may fail.';
         }
         
         // Load the assessment
@@ -118,24 +105,14 @@ function loadAssessmentFromStorage() {
         answers = {};
         timeRemaining = (currentAssessment.duration_minutes || 30) * 60;
         
-        // Store attempt_id separately for reliability
         if (currentAttemptId) {
             localStorage.setItem('attempt_id', currentAttemptId);
-            console.log('✅ Attempt ID stored:', currentAttemptId);
         } else {
-            // Try to get from separate localStorage key
             currentAttemptId = localStorage.getItem('attempt_id');
-            if (currentAttemptId) {
-                console.log('✅ Attempt ID retrieved from localStorage:', currentAttemptId);
-            } else {
-                // Check if there's a warning from the server
+            if (!currentAttemptId) {
                 if (currentAssessment.warning) {
-                    console.warn('⚠️  Server warning:', currentAssessment.warning);
                     showError(currentAssessment.warning);
                 } else {
-                    console.error("❌ No attempt_id found. Submission will fail.");
-                    console.error("   This usually means no user profile exists in the database.");
-                    console.error("   Please ensure at least one profile exists in the 'profiles' table.");
                     showError('No active assessment attempt. Please ensure at least one user profile exists in the database.');
                 }
                 // Disable submit button if no attempt_id
@@ -294,20 +271,13 @@ function updateTimerDisplay() {
 async function submitAssessment() {
     // Check if attempt_id exists - try multiple sources
     if (!currentAttemptId) {
-        // Try 1: Get from separate localStorage key
         currentAttemptId = localStorage.getItem('attempt_id');
-        console.log('Attempt ID from localStorage:', currentAttemptId);
-        
-        // Try 2: Get from stored assessment data
         if (!currentAttemptId) {
             const storedAssessment = localStorage.getItem('currentAssessment');
             if (storedAssessment) {
                 try {
                     const assessmentData = JSON.parse(storedAssessment);
                     currentAttemptId = assessmentData.attempt_id;
-                    console.log('Attempt ID from assessment data:', currentAttemptId);
-                    
-                    // Store it separately for next time
                     if (currentAttemptId) {
                         localStorage.setItem('attempt_id', currentAttemptId);
                     }
@@ -316,18 +286,11 @@ async function submitAssessment() {
                 }
             }
         }
-        
-        // If still no attempt_id, show error
         if (!currentAttemptId) {
-            console.error('❌ No attempt_id found in any source');
-            console.error('   This usually means no user profile exists in the database.');
-            console.error('   Please ensure at least one profile exists in the profiles table.');
-            showError('No active assessment attempt. Please ensure at least one user profile exists in the database. Contact your administrator.');
+            showError('No active assessment attempt. Please ensure at least one user profile exists in the database.');
             return;
         }
     }
-    
-    console.log('✅ Using attempt_id for submission:', currentAttemptId);
 
     // Disable submit button
     const submitBtn = document.getElementById('btnSubmit');
@@ -360,29 +323,15 @@ async function submitAssessment() {
         const data = await response.json();
 
         if (data.success) {
-            console.log('✅ Assessment submitted successfully:', data);
-            
-            // Clear localStorage (keep attempt_id for debugging if needed)
             localStorage.removeItem('currentAssessment');
-            // Optionally clear attempt_id after successful submission
-            // localStorage.removeItem('attempt_id');
-            
-            // Store results in localStorage for results page
-            // Use both keys for compatibility
             localStorage.setItem('assessmentResults', JSON.stringify(data));
-            localStorage.setItem('result_data', JSON.stringify(data)); // Also store as result_data for compatibility
+            localStorage.setItem('result_data', JSON.stringify(data));
             
-            console.log('✅ Results stored in localStorage. Redirecting to results page...');
-            
-            // Add small delay to ensure localStorage is written
             setTimeout(() => {
-                // Use window.location.assign for better reliability
                 window.location.assign('/static/results.html');
             }, 100);
         } else {
-            console.error('❌ Submission failed:', data);
             const errorMsg = data.error || data.detail || 'Failed to submit assessment';
-            console.error('Error details:', errorMsg);
             showError(errorMsg);
             submitBtn.disabled = false;
             submitBtn.textContent = 'Submit Assessment';

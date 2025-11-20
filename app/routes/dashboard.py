@@ -7,6 +7,7 @@ from typing import List, Optional, Dict, Any
 from uuid import UUID
 from datetime import datetime, timedelta
 from pydantic import BaseModel, Field
+import json
 
 from app.services.supabase_service import supabase_service
 from app.services.topic_question_service import topic_question_service
@@ -35,15 +36,12 @@ class SubmitAssessmentRequest(BaseModel):
 @router.get("/getAssessments")
 async def get_assessments():
     """
-    Get list of available assessments
+    Get list of available assessments grouped by courses
     
-    Returns assessments with:
-    - Skill name
-    - Question count
-    - Duration
-    - Difficulty level
-    - User's current level
-    - Market demand
+    Returns courses with:
+    - Course name
+    - Assessment count
+    - All assessments for each course
     """
     try:
         client = supabase_service.get_client()
@@ -53,7 +51,14 @@ async def get_assessments():
                 detail="Database service unavailable"
             )
         
-        # Get all published assessments
+        # Get all courses
+        courses_response = client.table("courses")\
+            .select("*")\
+            .execute()
+        
+        courses = courses_response.data if courses_response.data else []
+        
+        # Get all published assessments with course_id
         assessments_response = client.table("assessments")\
             .select("*")\
             .eq("status", "published")\
@@ -61,154 +66,81 @@ async def get_assessments():
         
         assessments = assessments_response.data if assessments_response.data else []
         
-        # Normalize domain name function
-        def normalize_domain(raw_name: str) -> str:
-            """Normalize course domain name.
-            
-            Handles:
-            - Removes .pdf suffix: "python.pdf" -> "python"
-            - Replaces underscores with spaces: "python_101" -> "python 101"
-            - Trims whitespace
-            - Capitalizes each word: "python datatypes" -> "Python Datatypes"
-            """
-            if not raw_name or not isinstance(raw_name, str):
-                return "General"
-            
-            # Convert to lowercase and trim
-            name = raw_name.strip().lower()
-            
-            # Remove .pdf suffix
-            if name.endswith('.pdf'):
-                name = name[:-4]
-            
-            # Replace underscores with spaces
-            name = name.replace('_', ' ')
-            
-            # Trim again after replacements
-            name = name.strip()
-            
-            if not name:
-                return "General"
-            
-            # Capitalize each word (e.g., "python datatypes" -> "Python Datatypes")
-            words = name.split()
-            normalized_words = [word.capitalize() for word in words]
-            
-            return " ".join(normalized_words)
-        
-        # Group assessments by normalized skill_domain and count unique sources
-        grouped_courses = {}
-        
+        # Group assessments by course_id (convert to string for consistent comparison)
+        course_assessments = {}
         for assessment in assessments:
-            # Normalize skill_domain using the normalization function
-            raw_skill = assessment.get("skill_domain", "Unknown")
-            skill = normalize_domain(raw_skill)
-            
-            # Initialize course group if not exists
-            if skill not in grouped_courses:
-                grouped_courses[skill] = {
-                    "skill_domain": skill,
-                    "assessments": [],
-                    "unique_sources": set()  # Track unique video/PDF sources
-                }
-            
-            # Add assessment to course group
-            grouped_courses[skill]["assessments"].append(assessment)
-            
-            # Try to extract source identifier from title or description
-            # Since source_id is not stored, we'll use title patterns or query embeddings
-            title = assessment.get("title", "").lower()
-            # For now, we'll count unique assessment titles as a proxy for unique sources
-            # This will be improved by querying embeddings tables
-            assessment_id = assessment.get("id")
-            if assessment_id:
-                grouped_courses[skill]["unique_sources"].add(str(assessment_id))
+            course_id = assessment.get("course_id")
+            if course_id:
+                # Convert to string for consistent key matching
+                course_id_str = str(course_id)
+                if course_id_str not in course_assessments:
+                    course_assessments[course_id_str] = []
+                course_assessments[course_id_str].append(assessment)
+                course_assessments[course_id_str].append(assessment)
         
-        # Query embeddings tables to get actual unique source counts per course
-        try:
-            # Get all unique video sources
-            video_response = client.table("video_embeddings")\
-                .select("video_id, video_title")\
-                .execute()
-            
-            video_sources = {}
-            if video_response.data:
-                for row in video_response.data:
-                    video_id = row.get("video_id")
-                    video_title = row.get("video_title", "")
-                    if video_id:
-                        # Normalize video title to match course names
-                        normalized_video_title = normalize_domain(video_title)
-                        if normalized_video_title not in video_sources:
-                            video_sources[normalized_video_title] = set()
-                        video_sources[normalized_video_title].add(video_id)
-            
-            # Get all unique PDF sources
-            pdf_response = client.table("pdf_embeddings")\
-                .select("pdf_id, pdf_title")\
-                .execute()
-            
-            pdf_sources = {}
-            if pdf_response.data:
-                for row in pdf_response.data:
-                    pdf_id = row.get("pdf_id")
-                    pdf_title = row.get("pdf_title", "")
-                    if pdf_id:
-                        # Normalize PDF title to match course names
-                        normalized_pdf_title = normalize_domain(pdf_title)
-                        if normalized_pdf_title not in pdf_sources:
-                            pdf_sources[normalized_pdf_title] = set()
-                        pdf_sources[normalized_pdf_title].add(pdf_id)
-            
-            # Update unique source counts for each course
-            for skill, course_info in grouped_courses.items():
-                # Count unique videos for this course
-                video_count = len(video_sources.get(skill, set()))
-                # Count unique PDFs for this course
-                pdf_count = len(pdf_sources.get(skill, set()))
-                # Total unique sources
-                total_unique_sources = video_count + pdf_count
-                
-                # If we found sources in embeddings, use that; otherwise use assessment count as fallback
-                if total_unique_sources > 0:
-                    course_info["unique_source_count"] = total_unique_sources
-                else:
-                    # Fallback: count unique assessment titles (normalized)
-                    unique_titles = set()
-                    for a in course_info["assessments"]:
-                        title = a.get("title", "")
-                        if title:
-                            # Normalize title to remove duplicates
-                            normalized_title = normalize_domain(title)
-                            unique_titles.add(normalized_title.lower())
-                    course_info["unique_source_count"] = len(unique_titles) if unique_titles else 1
-        except Exception as e:
-            logger.warning(f"Could not query embeddings for source counts: {str(e)}")
-            # Fallback: use assessment count
-            for skill, course_info in grouped_courses.items():
-                unique_titles = set()
-                for a in course_info["assessments"]:
-                    title = a.get("title", "")
-                    if title:
-                        normalized_title = normalize_domain(title)
-                        unique_titles.add(normalized_title.lower())
-                course_info["unique_source_count"] = len(unique_titles) if unique_titles else 1
-        
-        # Format response with course grouping and unique source counts
+        # Format courses with assessment counts
         formatted_courses = []
-        for skill, course_info in grouped_courses.items():
-            unique_count = course_info.get("unique_source_count", 1)
-            progress = min(unique_count * 5, 100)
+        for course in courses:
+            course_id = course.get("id")
+            course_id_str = str(course_id)  # Convert to string for consistent comparison
+            course_name = course.get("name", "Unknown")
+            course_assessments_list = course_assessments.get(course_id_str, [])
+            
+            # Count assessments directly from database for accuracy
+            # Query: COUNT(*) FROM assessments WHERE course_id = <course_id> AND status = 'published'
+            try:
+                count_response = client.table("assessments")\
+                    .select("id", count="exact")\
+                    .eq("course_id", course_id)\
+                    .eq("status", "published")\
+                    .execute()
+            
+                # Get count from response - Supabase returns count as attribute
+                if hasattr(count_response, 'count') and count_response.count is not None:
+                    test_count = count_response.count
+                elif hasattr(count_response, '__dict__') and 'count' in count_response.__dict__:
+                    test_count = count_response.__dict__['count']
+                else:
+                    # Fallback: query all and count (less efficient but reliable)
+                    count_data = client.table("assessments")\
+                        .select("id")\
+                        .eq("course_id", course_id)\
+                        .eq("status", "published")\
+                        .execute()
+                    test_count = len(count_data.data) if count_data.data else 0
+            except Exception:
+                # Fallback to length of filtered list if count query fails
+                test_count = len(course_assessments_list)
+            
+            progress = min(test_count * 5, 100) if test_count > 0 else 0
             
             formatted_courses.append({
-                "skill_domain": skill,
-                "skill_name": skill,  # For compatibility
-                "test_count": unique_count,  # Number of unique video/PDF sources
+                "id": course_id_str,  # Use string version for frontend
+                "name": course_name,
+                "skill_domain": course_name,  # For compatibility
+                "skill_name": course_name,  # For compatibility
+                "test_count": test_count,
                 "progress": progress,
-                "assessments": course_info["assessments"]  # All assessments for this course
+                "assessments": course_assessments_list
             })
         
+        
         # Format individual assessments for backward compatibility
+        # Normalize domain name function
+        def normalize_domain(raw_name: str) -> str:
+            """Normalize course domain name."""
+            if not raw_name or not isinstance(raw_name, str):
+                return "General"
+            name = raw_name.strip().lower()
+            if name.endswith('.pdf'):
+                name = name[:-4]
+            name = name.replace('_', ' ').strip()
+            if not name:
+                return "General"
+            words = name.split()
+            normalized_words = [word.capitalize() for word in words]
+            return " ".join(normalized_words)
+        
         formatted_assessments = []
         for assessment in assessments:
             raw_skill = assessment.get("skill_domain", "Unknown")
@@ -255,13 +187,13 @@ async def get_assessments():
         )
 
 
-@router.get("/assessments/by_course/{course_name}")
-async def get_assessments_by_course(course_name: str):
+@router.get("/assessments/by_course/{course_id}")
+async def get_assessments_by_course(course_id: str):
     """
-    Get assessments filtered by course name (skill_domain)
+    Get assessments filtered by course_id
     
     Args:
-        course_name: Course/skill domain name (e.g., "Python", "DevOps")
+        course_id: Course UUID
     
     Returns:
         List of assessments for the specified course
@@ -274,21 +206,25 @@ async def get_assessments_by_course(course_name: str):
                 detail="Database service unavailable"
             )
         
-        # Get assessments by skill_domain (course name) - CASE INSENSITIVE
-        # Fetch all published assessments and filter case-insensitively
+        # Get course name first
+        course_response = client.table("courses")\
+            .select("name")\
+            .eq("id", course_id)\
+            .limit(1)\
+            .execute()
+        
+        course_name = "Course"
+        if course_response.data and len(course_response.data) > 0:
+            course_name = course_response.data[0].get("name", "Course")
+        
+        # Get assessments by course_id
         assessments_response = client.table("assessments")\
             .select("*")\
             .eq("status", "published")\
+            .eq("course_id", course_id)\
             .execute()
         
-        all_assessments = assessments_response.data if assessments_response.data else []
-        
-        # Filter by course name case-insensitively
-        course_name_lower = course_name.strip().lower()
-        assessments = [
-            a for a in all_assessments 
-            if (a.get("skill_domain") or "").strip().lower() == course_name_lower
-        ]
+        assessments = assessments_response.data if assessments_response.data else []
         
         # Normalize domain name function (same as get_assessments)
         def normalize_domain(raw_name: str) -> str:
@@ -362,7 +298,6 @@ async def get_assessments_by_course(course_name: str):
             
             # Skip if we've already seen this normalized title for this course
             if title_key in seen_titles:
-                logger.debug(f"Skipping duplicate assessment: '{raw_title}' (normalized: '{normalized_title}')")
                 continue
             
             # Mark this title as seen
@@ -498,7 +433,6 @@ async def get_assessment_questions(assessment_id: str):
                 test_user_id = get_test_user_id()
                 if test_user_id:
                     system_user_id = str(test_user_id)
-                    logger.info(f"✅ Using test user for attempt: {system_user_id}")
                 else:
                     logger.error("❌ Could not get test user. Attempt creation will fail.")
                     logger.error("   Please ensure auth.users has at least one user, then run the SQL in profile_service.py")
@@ -520,7 +454,6 @@ async def get_assessment_questions(assessment_id: str):
                     "percentage_score": 0
                 }
                 
-                logger.info(f"Creating attempt with user_id: {system_user_id}, assessment_id: {assessment_id}")
                 
                 try:
                     attempt_response = client.table("attempts").insert(attempt_data).execute()
@@ -532,8 +465,6 @@ async def get_assessment_questions(assessment_id: str):
                         logger.error(f"Insert response: {attempt_response.data if attempt_response else 'No response'}")
                         logger.error(f"Attempt data sent: {attempt_data}")
                     else:
-                        logger.info(f"✅ Created attempt: {attempt_id} for assessment: {assessment_id}")
-                        logger.info(f"✅ Attempt created successfully - questions can now be submitted")
                         
                         # Verify attempt was actually inserted
                         try:
@@ -542,9 +473,7 @@ async def get_assessment_questions(assessment_id: str):
                                 .eq("id", attempt_id)\
                                 .limit(1)\
                                 .execute()
-                            if verify_response.data:
-                                logger.info(f"✅ Verified attempt exists in database: {verify_response.data[0]}")
-                            else:
+                            if not verify_response.data:
                                 logger.error(f"❌ Attempt creation verification failed - attempt not found in database")
                         except Exception as verify_error:
                             logger.error(f"❌ Error verifying attempt: {str(verify_error)}")
@@ -586,8 +515,6 @@ async def get_assessment_questions(assessment_id: str):
             # Still return questions so user can see them, but they can't submit
             response_data["error"] = "No attempt created. Please ensure at least one user profile exists in the database."
             response_data["warning"] = "Assessment loaded but submission may fail. Please create a user profile in Supabase."
-        else:
-            logger.info(f"✅ Successfully loaded assessment {assessment_id} with {len(formatted_questions)} questions and attempt_id: {attempt_id}")
         
         return response_data
         
@@ -652,7 +579,6 @@ async def start_assessment(
         assessment_id = UUID(assessment["id"])
         
         # Get questions from the assessment's blueprint or directly from skill_assessment_questions
-        logger.info(f"Fetching questions for assessment: {assessment.get('title')}")
         
         # Try to get questions from blueprint first
         blueprint = assessment.get("blueprint")
@@ -714,7 +640,6 @@ async def start_assessment(
             test_user_id = get_test_user_id()
             if test_user_id:
                 system_user_id = str(test_user_id)
-                logger.info(f"✅ Using test user for attempt: {system_user_id}")
             else:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -746,7 +671,6 @@ async def start_assessment(
                 detail="Failed to create attempt"
             )
         
-        logger.info(f"✅ Created attempt: {attempt.get('id')}")
         
         # Format questions for frontend (remove correct answers)
         formatted_questions = []
@@ -801,7 +725,6 @@ async def submit_assessment(
             )
         
         attempt_id_str = str(request.attempt_id)
-        logger.info(f"🔍 Looking for attempt: {attempt_id_str}")
         
         # Try to find the attempt - check both UUID and string format
         attempt_response = client.table("attempts")\
@@ -822,8 +745,6 @@ async def submit_assessment(
                     .order("started_at", desc=True)\
                     .limit(5)\
                     .execute()
-                if recent_attempts.data:
-                    logger.info(f"Recent attempts: {recent_attempts.data}")
             except:
                 pass
             
@@ -832,7 +753,6 @@ async def submit_assessment(
                 detail=f"No active assessment attempt found for ID: {attempt_id_str}. Please start a new assessment."
             )
         
-        logger.info(f"✅ Found attempt: {attempt.get('id')}, status: {attempt.get('status')}")
         
         # Check if attempt is already completed
         if attempt.get("status") == "completed":
@@ -946,7 +866,6 @@ async def submit_assessment(
                 results=results_data,
                 skill_domain=skill_domain
             )
-            logger.info("✅ Generated personalized feedback")
         except Exception as e:
             logger.warning(f"Feedback generation failed: {str(e)}. Using fallback.")
             # Fallback will be handled by the service
@@ -974,7 +893,6 @@ async def submit_assessment(
             
             try:
                 client.table("results").insert(result_data_db).execute()
-                logger.info(f"✅ Created result for attempt {request.attempt_id}")
             except Exception as e:
                 logger.error(f"Could not create result: {str(e)}")
                 # Continue anyway - result is still returned to frontend
@@ -1277,7 +1195,6 @@ async def get_progress():
         avg_score = round(sum(scores) / len(scores), 1) if scores else 0
         
         # Log for debugging
-        logger.info(f"Progress calculation: {total_assessments} completed attempts, {len(scores)} with valid scores, avg_score: {avg_score}")
         if total_assessments > 0 and len(scores) == 0:
             logger.warning(f"No valid scores found in {total_assessments} completed attempts. Sample attempt data: {attempts[0] if attempts else 'No attempts'}")
         

@@ -44,7 +44,38 @@ CREATE INDEX IF NOT EXISTS idx_profiles_email ON profiles(email);
 CREATE INDEX IF NOT EXISTS idx_profiles_role ON profiles(role);
 
 -- ===================================================================
--- TABLE 2: Assessments
+-- TABLE 2: Courses
+-- ===================================================================
+-- Course definitions for grouping assessments
+-- ===================================================================
+CREATE TABLE IF NOT EXISTS courses (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+COMMENT ON TABLE courses IS 'Course definitions for grouping assessments';
+
+-- Ensure UNIQUE constraint exists on name column (for existing tables)
+DO $$ 
+BEGIN
+    -- Check if unique constraint exists
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conname = 'courses_name_key' 
+        AND conrelid = 'courses'::regclass
+    ) THEN
+        -- Add unique constraint if it doesn't exist
+        ALTER TABLE courses ADD CONSTRAINT courses_name_key UNIQUE (name);
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_courses_name ON courses(name);
+
+-- ===================================================================
+-- TABLE 3: Assessments
 -- ===================================================================
 -- Assessment definitions and configurations
 -- ===================================================================
@@ -53,6 +84,7 @@ CREATE TABLE IF NOT EXISTS assessments (
     title TEXT NOT NULL,
     description TEXT,
     skill_domain TEXT NOT NULL,
+    course_id UUID REFERENCES courses(id) ON DELETE SET NULL,
     difficulty TEXT DEFAULT 'medium' CHECK (difficulty IN ('easy', 'medium', 'hard')),
     question_count INTEGER DEFAULT 10 CHECK (question_count > 0),
     duration_minutes INTEGER DEFAULT 60 CHECK (duration_minutes > 0),
@@ -67,12 +99,28 @@ CREATE TABLE IF NOT EXISTS assessments (
 
 COMMENT ON TABLE assessments IS 'Assessment definitions for Skill Assessment';
 
+-- Add course_id column if it doesn't exist (for existing tables)
+DO $$ 
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'assessments' 
+        AND column_name = 'course_id'
+    ) THEN
+        ALTER TABLE assessments 
+        ADD COLUMN course_id UUID REFERENCES courses(id) ON DELETE SET NULL;
+        
+        COMMENT ON COLUMN assessments.course_id IS 'Foreign key to courses table for course-based grouping';
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_assessments_skill_domain ON assessments(skill_domain);
+CREATE INDEX IF NOT EXISTS idx_assessments_course_id ON assessments(course_id);
 CREATE INDEX IF NOT EXISTS idx_assessments_status ON assessments(status);
 CREATE INDEX IF NOT EXISTS idx_assessments_created_by ON assessments(created_by);
 
 -- ===================================================================
--- TABLE 3: Attempts
+-- TABLE 4: Attempts
 -- ===================================================================
 -- User attempts for assessments
 -- ===================================================================
@@ -101,14 +149,53 @@ CREATE INDEX IF NOT EXISTS idx_attempts_status ON attempts(status);
 CREATE INDEX IF NOT EXISTS idx_attempts_created_at ON attempts(created_at);
 
 -- ===================================================================
--- TABLE 4: Responses
+-- TABLE 5: Skill Assessment Questions
+-- ===================================================================
+-- Questions generated from video and PDF embeddings
+-- ===================================================================
+CREATE TABLE IF NOT EXISTS skill_assessment_questions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    topic TEXT NOT NULL,
+    question TEXT NOT NULL,
+    options JSONB NOT NULL, -- Array of options for MCQ questions
+    correct_answer TEXT NOT NULL,
+    source_type TEXT CHECK (source_type IN ('pdf', 'video', 'both')),
+    source_id TEXT, -- Video ID or document ID if applicable
+    explanation TEXT, -- Optional explanation for the answer
+    difficulty TEXT DEFAULT 'medium' CHECK (difficulty IN ('easy', 'medium', 'hard')),
+    assessment_id UUID REFERENCES assessments(id) ON DELETE CASCADE, -- Links question to assessment
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+COMMENT ON TABLE skill_assessment_questions IS 'Stores questions generated from existing video and PDF embeddings';
+
+-- Add assessment_id column if it doesn't exist (for existing tables)
+DO $$ 
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'skill_assessment_questions' 
+        AND column_name = 'assessment_id'
+    ) THEN
+        ALTER TABLE skill_assessment_questions 
+        ADD COLUMN assessment_id UUID REFERENCES assessments(id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_topic ON skill_assessment_questions(topic);
+CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_source_type ON skill_assessment_questions(source_type);
+CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_assessment_id ON skill_assessment_questions(assessment_id);
+CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_created_at ON skill_assessment_questions(created_at);
+
+-- ===================================================================
+-- TABLE 6: Responses
 -- ===================================================================
 -- Individual question responses in an attempt
 -- ===================================================================
 CREATE TABLE IF NOT EXISTS responses (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     attempt_id UUID NOT NULL REFERENCES attempts(id) ON DELETE CASCADE,
-    question_id UUID NOT NULL, -- References skill_assessment_questions(id)
+    question_id UUID NOT NULL REFERENCES skill_assessment_questions(id) ON DELETE CASCADE,
     answer_text TEXT, -- For descriptive/coding questions
     selected_option TEXT, -- For MCQ questions (A, B, C, D)
     score NUMERIC(10,2) DEFAULT 0,
@@ -129,7 +216,7 @@ CREATE INDEX IF NOT EXISTS idx_responses_question_id ON responses(question_id);
 CREATE INDEX IF NOT EXISTS idx_responses_status ON responses(status);
 
 -- ===================================================================
--- TABLE 5: Results
+-- TABLE 7: Results
 -- ===================================================================
 -- Final assessment results
 -- ===================================================================
@@ -158,30 +245,6 @@ CREATE INDEX IF NOT EXISTS idx_results_attempt_id ON results(attempt_id);
 CREATE INDEX IF NOT EXISTS idx_results_user_id ON results(user_id);
 CREATE INDEX IF NOT EXISTS idx_results_assessment_id ON results(assessment_id);
 CREATE INDEX IF NOT EXISTS idx_results_passed ON results(passed);
-
--- ===================================================================
--- TABLE 6: Skill Assessment Questions
--- ===================================================================
--- Questions generated from video and PDF embeddings
--- ===================================================================
-CREATE TABLE IF NOT EXISTS skill_assessment_questions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    topic TEXT NOT NULL,
-    question TEXT NOT NULL,
-    options JSONB NOT NULL, -- Array of options for MCQ questions
-    correct_answer TEXT NOT NULL,
-    source_type TEXT CHECK (source_type IN ('pdf', 'video', 'both')),
-    source_id TEXT, -- Video ID or document ID if applicable
-    explanation TEXT, -- Optional explanation for the answer
-    difficulty TEXT DEFAULT 'medium' CHECK (difficulty IN ('easy', 'medium', 'hard')),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-COMMENT ON TABLE skill_assessment_questions IS 'Stores questions generated from existing video and PDF embeddings';
-
-CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_topic ON skill_assessment_questions(topic);
-CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_source_type ON skill_assessment_questions(source_type);
-CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_created_at ON skill_assessment_questions(created_at);
 
 -- ===================================================================
 -- PART 2: RAG SYSTEM TABLES (Documentation Only)
@@ -280,6 +343,56 @@ CREATE TRIGGER update_results_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_courses_updated_at ON courses;
+CREATE TRIGGER update_courses_updated_at
+    BEFORE UPDATE ON courses
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- ===================================================================
+-- PART 4: DEFAULT DATA AND MIGRATIONS
+-- ===================================================================
+
+-- ===================================================================
+-- INSERT DEFAULT COURSES
+-- ===================================================================
+-- Insert default courses if they don't exist
+-- Use a safer approach that works even if UNIQUE constraint doesn't exist
+INSERT INTO courses (name, description) 
+SELECT 'Python', 'Python programming language assessments'
+WHERE NOT EXISTS (SELECT 1 FROM courses WHERE name = 'Python');
+
+INSERT INTO courses (name, description) 
+SELECT 'DevOps', 'DevOps tools and practices assessments'
+WHERE NOT EXISTS (SELECT 1 FROM courses WHERE name = 'DevOps');
+
+-- ===================================================================
+-- MIGRATION: Update existing assessments to have course_id
+-- ===================================================================
+-- This will set course_id for existing assessments based on skill_domain
+-- Run this after initial schema creation if you have existing assessments
+
+-- Update Python assessments
+UPDATE assessments 
+SET course_id = (SELECT id FROM courses WHERE name = 'Python' LIMIT 1)
+WHERE skill_domain ILIKE '%python%' 
+  AND course_id IS NULL;
+
+-- Update DevOps assessments
+UPDATE assessments 
+SET course_id = (SELECT id FROM courses WHERE name = 'DevOps' LIMIT 1)
+WHERE (skill_domain ILIKE '%devops%' 
+    OR skill_domain ILIKE '%docker%'
+    OR skill_domain ILIKE '%kubernetes%'
+    OR skill_domain ILIKE '%linux%'
+    OR skill_domain ILIKE '%sonarqube%'
+    OR title ILIKE '%devops%'
+    OR title ILIKE '%docker%'
+    OR title ILIKE '%kubernetes%'
+    OR title ILIKE '%linux%'
+    OR title ILIKE '%sonarqube%')
+  AND course_id IS NULL;
+
 -- ===================================================================
 -- VERIFICATION QUERIES
 -- ===================================================================
@@ -290,7 +403,8 @@ CREATE TRIGGER update_results_updated_at
 -- FROM information_schema.tables 
 -- WHERE table_schema = 'public' 
 --     AND table_name IN (
---         'profiles', 
+--         'profiles',
+--         'courses',
 --         'assessments', 
 --         'attempts', 
 --         'responses', 
@@ -298,6 +412,22 @@ CREATE TRIGGER update_results_updated_at
 --         'skill_assessment_questions'
 --     )
 -- ORDER BY table_name;
+
+-- Check courses table
+-- SELECT * FROM courses;
+
+-- Check assessments with course_id
+-- SELECT id, title, skill_domain, course_id, 
+--        (SELECT name FROM courses WHERE id = assessments.course_id) as course_name
+-- FROM assessments 
+-- LIMIT 10;
+
+-- Count assessments per course
+-- SELECT c.name, COUNT(a.id) as assessment_count
+-- FROM courses c
+-- LEFT JOIN assessments a ON a.course_id = c.id
+-- GROUP BY c.name
+-- ORDER BY assessment_count DESC;
 
 -- Check foreign key constraints
 -- SELECT

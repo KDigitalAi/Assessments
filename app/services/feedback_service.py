@@ -22,7 +22,6 @@ class FeedbackService:
         try:
             if settings.OPENAI_API_KEY and "your-openai" not in settings.OPENAI_API_KEY:
                 self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
-                logger.info("OpenAI client initialized for feedback service")
             else:
                 logger.warning("OpenAI API key not configured. Feedback generation will use fallback messages.")
                 self.client = None
@@ -68,7 +67,6 @@ class FeedbackService:
                     skill_domain=skill_domain
                 )
                 if feedback and len(feedback.strip()) > 0:
-                    logger.info("✅ Generated feedback using OpenAI")
                     return feedback
                 else:
                     logger.warning("OpenAI returned empty feedback. Using fallback.")
@@ -84,7 +82,6 @@ class FeedbackService:
             topic_analysis=topic_analysis,
             skill_domain=skill_domain
         )
-        logger.info("✅ Generated fallback feedback")
         return fallback_feedback
     
     def _analyze_topic_performance(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:

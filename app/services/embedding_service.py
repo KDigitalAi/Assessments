@@ -22,7 +22,6 @@ class EmbeddingService:
         try:
             if settings.OPENAI_API_KEY and "your-openai" not in settings.OPENAI_API_KEY:
                 self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
-                logger.info("OpenAI client initialized successfully")
             else:
                 logger.warning("OpenAI API key not configured. Embedding features will not work.")
                 self.client = None

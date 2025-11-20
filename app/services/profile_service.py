@@ -43,23 +43,11 @@ def ensure_default_test_user() -> Optional[UUID]:
             
             if test_user_response.data and len(test_user_response.data) > 0:
                 profile_id = test_user_response.data[0].get("id")
-                success_msg = f"✅ Test user already exists in Supabase: {TEST_USER_EMAIL} (ID: {profile_id})"
-                logger.info(success_msg)
-                print(success_msg)  # Also print to console as requested
-                # Verify the record exists by fetching again
-                verify_response = client.table("profiles")\
-                    .select("*")\
-                    .eq("email", TEST_USER_EMAIL)\
-                    .limit(1)\
-                    .execute()
-                if verify_response.data:
-                    logger.info(f"✅ Verification: Test user confirmed in database with email={verify_response.data[0].get('email')}, role={verify_response.data[0].get('role')}")
                 return UUID(profile_id) if profile_id else None
         except Exception as e:
             logger.warning(f"⚠️  Error checking for test user: {str(e)}")
         
         # Step 2: Test user doesn't exist - try to create it
-        logger.info(f"🔄 Test user not found. Creating default test user: {TEST_USER_EMAIL}")
         
         # Strategy: Use SQL to create the profile using any existing auth.user ID
         # This bypasses the need to know the auth.user ID upfront
@@ -102,10 +90,8 @@ def ensure_default_test_user() -> Optional[UUID]:
             if existing_profiles.data and len(existing_profiles.data) > 0:
                 # Use existing profile's ID (which is already a valid auth.user ID)
                 auth_user_id = existing_profiles.data[0].get("id")
-                logger.info(f"Found existing profile with auth.user ID: {auth_user_id}")
             else:
                 # Profiles table is empty - try to get auth.user ID via RPC or SQL
-                logger.info("Profiles table is empty. Attempting to find auth.user ID...")
                 
                 # Try to use RPC to create test user profile automatically
                 # Strategy: Try to call a Supabase RPC function that can access auth.users
@@ -128,9 +114,6 @@ def ensure_default_test_user() -> Optional[UUID]:
                         if profile_data:
                             auth_user_id = profile_data.get("id")
                             if auth_user_id:
-                                logger.info(f"✅ Created test user via RPC function: {auth_user_id}")
-                                logger.info(f"✅ Test user profile created successfully in Supabase")
-                                print("✅ Test user profile created successfully in Supabase.")
                                 # Verify and return
                                 verify_response = client.table("profiles")\
                                     .select("*")\
@@ -142,8 +125,6 @@ def ensure_default_test_user() -> Optional[UUID]:
                                     return UUID(profile_id) if profile_id else None
                 except Exception as rpc_error:
                     # RPC function doesn't exist - that's okay, continue with SQL approach
-                    logger.debug(f"RPC create_test_user_profile not available: {str(rpc_error)}")
-                    logger.debug("   To enable automatic creation, run app/models/create_test_user_rpc.sql in Supabase")
                     auth_user_id = None
                 
                 # If we still don't have auth_user_id, provide clear instructions
@@ -191,7 +172,6 @@ def ensure_default_test_user() -> Optional[UUID]:
                 profile_response = client.table("profiles").insert(test_profile_data).execute()
                 if profile_response.data and len(profile_response.data) > 0:
                     profile_id = UUID(profile_response.data[0].get("id"))
-                    logger.info(f"✅ Created test user profile: {profile_id}")
                     
                     # Verify the creation by fetching again
                     verify_response = client.table("profiles")\
@@ -203,12 +183,6 @@ def ensure_default_test_user() -> Optional[UUID]:
                     if verify_response.data and len(verify_response.data) > 0:
                         profile_data = verify_response.data[0]
                         success_msg = f"✅ Default test user created successfully in Supabase"
-                        logger.info(success_msg)
-                        print(success_msg)  # Also print to console as requested
-                        logger.info(f"   Email: {profile_data.get('email')}")
-                        logger.info(f"   Full Name: {profile_data.get('full_name')}")
-                        logger.info(f"   Role: {profile_data.get('role')}")
-                        logger.info(f"   ID: {profile_data.get('id')}")
                         return profile_id
                     else:
                         logger.error("❌ Profile created but verification failed - profile not found in database")
@@ -218,7 +192,6 @@ def ensure_default_test_user() -> Optional[UUID]:
                 error_msg = str(insert_error).lower()
                 if "unique" in error_msg or "duplicate" in error_msg or "conflict" in error_msg or "violates unique constraint" in error_msg:
                     # Profile might have been created by another request - try to fetch it again
-                    logger.info("Profile may have been created by another process. Re-fetching...")
                     try:
                         test_user_response = client.table("profiles")\
                             .select("*")\
@@ -228,8 +201,6 @@ def ensure_default_test_user() -> Optional[UUID]:
                         if test_user_response.data and len(test_user_response.data) > 0:
                             profile_id = test_user_response.data[0].get("id")
                             success_msg = f"✅ Test user already exists in Supabase: {TEST_USER_EMAIL}"
-                            logger.info(success_msg)
-                            print(success_msg)  # Also print to console as requested
                             return UUID(profile_id) if profile_id else None
                     except Exception:
                         pass

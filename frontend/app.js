@@ -132,11 +132,9 @@ async function loadCourses() {
         if (data.success) {
             assessments = data.assessments;
             
-            // Use new courses format if available (with unique source counts)
             if (data.courses && data.courses.length > 0) {
                 displayCoursesFromData(data.courses);
             } else {
-                // Fallback to old format
                 displayCourses(assessments);
             }
         } else {
@@ -259,7 +257,7 @@ function displayCourses(assessmentsList) {
                         <div class="progress-fill" style="width: ${progress}%"></div>
                     </div>
                 </div>
-                <button class="view-assessments-btn" onclick="openCourse('${course.displayName.replace(/'/g, "\\'")}')">
+                <button class="view-assessments-btn" onclick="openCourse('${course.displayName.replace(/'/g, "\\'")}', '${course.id || ''}')">
                     View Assessments
                 </button>
             </div>
@@ -278,9 +276,9 @@ function displayCoursesFromData(coursesData) {
 
     // Display course cards with unique source counts
     container.innerHTML = coursesData.map(course => {
-        const icon = getSkillIcon(course.skill_domain || course.skill_name);
-        const totalTests = course.test_count || 1;  // Unique source count from backend
-        const progress = course.progress || Math.min(totalTests * 5, 100);
+        const icon = getSkillIcon(course.skill_domain || course.skill_name || course.name);
+        const totalTests = course.test_count || 0;  // Use 0 if no tests, still show course
+        const progress = course.progress || (totalTests > 0 ? Math.min(totalTests * 5, 100) : 0);
         const testLabel = totalTests === 1 ? 'Test' : 'Tests';
         
         return `
@@ -301,7 +299,7 @@ function displayCoursesFromData(coursesData) {
                         <div class="progress-fill" style="width: ${progress}%"></div>
                     </div>
                 </div>
-                <button class="view-assessments-btn" onclick="openCourse('${(course.skill_domain || course.skill_name).replace(/'/g, "\\'")}')">
+                <button class="view-assessments-btn" onclick="openCourse('${(course.skill_domain || course.skill_name).replace(/'/g, "\\'")}', '${course.id || ''}')">
                     View Assessments
                 </button>
             </div>
@@ -309,11 +307,18 @@ function displayCoursesFromData(coursesData) {
     }).join('');
 }
 
-function openCourse(courseName) {
-    // Store selected course in localStorage
-    localStorage.setItem('selectedCourse', courseName);
-    // Redirect to assessments page
-    window.location.href = '/static/assessments.html';
+function openCourse(courseName, courseId) {
+    // Store selected course ID in localStorage (prefer courseId if available)
+    if (courseId) {
+        localStorage.setItem('selectedCourseId', courseId);
+        localStorage.setItem('selectedCourse', courseName); // Keep for backward compatibility
+        // Redirect to assessments page with course_id
+        window.location.href = `/static/assessments.html?course_id=${courseId}`;
+    } else {
+        // Fallback to old method
+        localStorage.setItem('selectedCourse', courseName);
+        window.location.href = '/static/assessments.html';
+    }
 }
 
 async function startAssessmentById(assessmentId, skillName, numQuestions) {

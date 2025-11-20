@@ -26,7 +26,6 @@ class TopicQuestionService:
         try:
             if settings.OPENAI_API_KEY and "your-openai" not in settings.OPENAI_API_KEY:
                 self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
-                logger.info("OpenAI client initialized for topic question service")
             else:
                 logger.warning("OpenAI API key not configured. Question generation will not work.")
                 self.client = None
@@ -64,7 +63,6 @@ class TopicQuestionService:
                 match_count=match_count
             )
             
-            logger.info(f"Found {len(chunks)} chunks for topic: {topic}")
             return chunks
             
         except Exception as e:
@@ -204,7 +202,6 @@ Ensure all questions are relevant to the topic "{topic}" and based on the provid
                 question['source_id'] = source_id
                 question['question_type'] = question_type
             
-            logger.info(f"Generated {len(questions)} questions for topic: {topic}")
             return questions
             
         except json.JSONDecodeError as e:
@@ -300,7 +297,6 @@ Ensure all questions are relevant to the topic "{topic}" and based on the provid
         """
         try:
             # Step 1: Fetch relevant content using existing embeddings
-            logger.info(f"Fetching embeddings for topic: {topic}")
             chunks = self.fetch_embeddings_by_topic(
                 topic=topic,
                 source_type=source_type,
@@ -315,7 +311,6 @@ Ensure all questions are relevant to the topic "{topic}" and based on the provid
                 }
             
             # Step 2: Generate questions from retrieved content
-            logger.info(f"Generating {num_questions} questions for topic: {topic}")
             questions = self.generate_questions_from_embeddings(
                 topic=topic,
                 chunks=chunks,
@@ -331,7 +326,6 @@ Ensure all questions are relevant to the topic "{topic}" and based on the provid
                 }
             
             # Step 3: Store questions in database
-            logger.info(f"Storing {len(questions)} questions in database")
             store_result = self.store_questions(questions)
             
             if not store_result.get('success'):

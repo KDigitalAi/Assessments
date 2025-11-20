@@ -211,80 +211,52 @@
             return urlParams.get(name);
         }
         
-        // Load results from URL parameter or localStorage
         document.addEventListener('DOMContentLoaded', async () => {
-            console.log('🔍 Loading results page...');
-            
             const attemptId = getUrlParameter('attempt_id');
             
             try {
                 if (attemptId) {
-                    // Fetch result from API using attempt_id
-                    console.log('🔍 Fetching result for attempt_id:', attemptId);
-                    
                     const response = await fetch(`${API_BASE_URL}/attempts/${attemptId}/result`);
                     
-                    // Parse JSON response
                     let data;
                     try {
                         data = await response.json();
-                        console.log('📦 Raw API response:', data);
                     } catch (parseError) {
-                        console.error('❌ Failed to parse JSON response:', parseError);
                         throw new Error(`Invalid response from server: HTTP ${response.status}`);
                     }
                     
-                    // Check if response is OK
                     if (!response.ok) {
-                        // Handle error response
                         const errorMessage = data?.detail || data?.error || data?.message || `HTTP ${response.status}: Failed to fetch result`;
-                        console.error('❌ API Error:', errorMessage);
                         throw new Error(String(errorMessage));
                     }
                     
-                    // Check if data indicates success
                     if (!data || !data.success) {
                         const errorMsg = data?.error || data?.detail || 'Failed to fetch result data';
-                        console.error('❌ API returned success=false:', errorMsg);
                         throw new Error(String(errorMsg));
                     }
                     
-                    console.log('✅ Result data fetched from API:', data);
                     displayResults(data);
                     
                 } else {
-                    // Fallback to localStorage for backward compatibility
-                    console.log('⚠️  No attempt_id in URL, checking localStorage...');
-                    
                     let storedResults = localStorage.getItem('assessmentResults');
                     if (!storedResults) {
                         storedResults = localStorage.getItem('result_data');
                     }
                     
                     if (!storedResults) {
-                        console.error('❌ No results found in localStorage or URL');
                         showError('No results found. Please complete an assessment first.');
                         return;
                     }
 
-                    console.log('✅ Found results in localStorage:', storedResults.substring(0, 100) + '...');
-                    
                     const results = JSON.parse(storedResults);
-                    console.log('✅ Result data loaded from localStorage:', results);
-                    
                     displayResults(results);
                     
-                    // Clear results from localStorage after successful display
                     localStorage.removeItem('assessmentResults');
                     localStorage.removeItem('result_data');
                 }
                 
-                console.log('✅ Results displayed successfully');
-                
             } catch (error) {
-                console.error('❌ Error loading results:', error);
-                console.error('Error type:', typeof error);
-                console.error('Error details:', error);
+                console.error('Error loading results:', error);
                 
                 // Properly handle error message (could be string or object)
                 let errorMessage = 'Failed to load results';
@@ -316,10 +288,7 @@
         });
 
         function displayResults(data) {
-            console.log(' Displaying results:', data);
-            
             if (!data || !data.success) {
-                console.error('❌ Invalid result data:', data);
                 showError(data?.error || data?.detail || 'Failed to load results');
                 return;
             }

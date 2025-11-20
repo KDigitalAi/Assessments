@@ -68,15 +68,11 @@ class SupabaseService:
                 # Try to query a table that should exist (or at least check if we can connect)
                 # This is a lightweight test that doesn't require any specific table
                 _ = self.client.table("profiles").select("id").limit(0).execute()
-                logger.info("[OK] Supabase client initialized and connection verified successfully")
             except Exception as test_error:
                 # If profiles table doesn't exist, that's okay - we just want to verify connection works
                 error_msg = str(test_error).lower()
-                if "does not exist" in error_msg or "relation" in error_msg:
-                    logger.info("[OK] Supabase client initialized successfully (tables may need to be created)")
-                else:
+                if "does not exist" not in error_msg and "relation" not in error_msg:
                     logger.warning(f"[WARN] Supabase client initialized but connection test failed: {str(test_error)}")
-                    # Still keep the client, as it might work for other operations
                     
         except Exception as e:
             logger.error(f"[WARN] Failed to initialize Supabase client: {str(e)}. Database features may be unavailable.")
@@ -154,7 +150,6 @@ class SupabaseService:
         if use_cache:
             cached = cache.get(cache_key)
             if cached is not None:
-                logger.debug(f"Cache hit for assessment {assessment_id}")
                 return cached
         
         try:
@@ -236,7 +231,6 @@ class SupabaseService:
         if use_cache:
             cached = cache.get(cache_key)
             if cached is not None:
-                logger.debug(f"Cache hit for question {question_id}")
                 return cached
         
         try:
@@ -310,7 +304,6 @@ class SupabaseService:
         if use_cache:
             cached = cache.get(cache_key)
             if cached is not None:
-                logger.debug(f"Cache hit for assessment questions {assessment_id}")
                 return cached
         
         try:

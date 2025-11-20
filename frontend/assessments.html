@@ -135,12 +135,14 @@
         // API Configuration
         const API_BASE_URL = 'http://127.0.0.1:8000/api';
 
-        // Get selected course from localStorage
-        const courseName = localStorage.getItem('selectedCourse');
+        // Get course_id from URL parameter or localStorage (fallback)
+        const urlParams = new URLSearchParams(window.location.search);
+        const courseId = urlParams.get('course_id') || localStorage.getItem('selectedCourseId');
+        const courseName = localStorage.getItem('selectedCourseName') || localStorage.getItem('selectedCourse') || 'Course';
 
         // Initialize when page loads
         document.addEventListener('DOMContentLoaded', () => {
-            if (!courseName) {
+            if (!courseId) {
                 showError('No course selected. Please go back and select a course.');
                 return;
             }
@@ -154,7 +156,8 @@
 
         async function loadAssessments() {
             try {
-                const response = await fetch(`${API_BASE_URL}/assessments/by_course/${encodeURIComponent(courseName)}`);
+                // Use course_id instead of course name
+                const response = await fetch(`${API_BASE_URL}/assessments/by_course/${courseId}`);
                 
                 if (!response.ok) {
                     const errorData = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
@@ -229,7 +232,6 @@
                 
                 // Skip if we've already seen this normalized title
                 if (seenTitles.has(titleKey)) {
-                    console.log(`Skipping duplicate assessment: '${rawTitle}' (normalized: '${normalizedTitle}')`);
                     return;
                 }
                 
@@ -277,7 +279,6 @@
                     button.textContent = 'Loading...';
                 }
 
-                console.log(`Starting assessment: ${assessmentId}`);
                 
                 // Fetch questions from backend
                 const response = await fetch(`${API_BASE_URL}/assessments/${assessmentId}/questions`);
@@ -288,7 +289,6 @@
                 }
 
                 const data = await response.json();
-                console.log('Assessment data received:', data);
 
                 // Validate response
                 if (!data.success) {
@@ -314,15 +314,7 @@
                 // Also store attempt_id separately for reliability
                 if (data.attempt_id) {
                     localStorage.setItem('attempt_id', data.attempt_id);
-                    console.log('✅ Attempt ID stored separately:', data.attempt_id);
-                } else {
-                    console.warn('⚠️  No attempt_id in response:', data);
                 }
-                
-                console.log('✅ Assessment data stored in localStorage');
-                
-                // Redirect to assessment page
-                console.log('Redirecting to assessment page...');
                 window.location.href = '/static/assessment.html';
                 
             } catch (error) {

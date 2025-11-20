@@ -18,20 +18,32 @@ import os
 import sys
 import json
 import time
-from typing import List, Dict, Any, Optional
+import hashlib
+from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from openai import OpenAI
 
-# Load environment variables
+# Load environment variables (prefer project root .env)
 BASE_DIR = Path(__file__).resolve().parent
-env_path = BASE_DIR / ".env"
-load_dotenv(dotenv_path=env_path, override=True)
+PROJECT_ROOT = BASE_DIR.parent
+
+env_candidates = [
+    PROJECT_ROOT / ".env",
+    BASE_DIR / ".env"
+]
+
+for env_path in env_candidates:
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path, override=True)
+        break
 
 # Configuration
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+# Load service role key first, fallback to anon key
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+SUPABASE_KEY = SUPABASE_SERVICE_KEY or os.getenv("SUPABASE_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
@@ -48,14 +60,20 @@ class AssessmentGenerator:
         """Initialize clients"""
         self.supabase_client: Optional[Client] = None
         self.openai_client: Optional[OpenAI] = None
+        self.assessment_cache: Dict[str, Dict[str, Any]] = {}
         self._initialize_clients()
+        self._populate_assessment_cache()
     
     def _initialize_clients(self):
         """Initialize Supabase and OpenAI clients"""
         # Initialize Supabase
         try:
-            if not SUPABASE_URL or not SUPABASE_KEY:
-                print("ERROR: SUPABASE_URL and SUPABASE_KEY must be set in .env file")
+            if not SUPABASE_URL:
+                print("ERROR: SUPABASE_URL must be set in .env file")
+                sys.exit(1)
+            
+            if not SUPABASE_KEY:
+                print("ERROR: Either SUPABASE_SERVICE_KEY or SUPABASE_KEY must be set in .env file")
                 sys.exit(1)
             
             if "your-project" in SUPABASE_URL.lower() or "your-supabase" in SUPABASE_KEY.lower():
@@ -63,7 +81,7 @@ class AssessmentGenerator:
                 sys.exit(1)
             
             self.supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
-            print("✓ Supabase client initialized")
+                
         except Exception as e:
             print(f"ERROR: Failed to initialize Supabase client: {str(e)}")
             sys.exit(1)
@@ -75,10 +93,48 @@ class AssessmentGenerator:
                 sys.exit(1)
             
             self.openai_client = OpenAI(api_key=OPENAI_API_KEY)
-            print("✓ OpenAI client initialized")
         except Exception as e:
             print(f"ERROR: Failed to initialize OpenAI client: {str(e)}")
             sys.exit(1)
+
+    def _populate_assessment_cache(self):
+        """Cache assessment rows keyed by pdf_id for quick duplicate checks"""
+        self.assessment_cache = {}
+        if not self.supabase_client:
+            return
+
+        try:
+            response = self.supabase_client.table("assessments")\
+                .select("id, blueprint, course_id, status")\
+                .execute()
+
+            for record in response.data or []:
+                pdf_id = self.extract_pdf_id(record.get("blueprint"))
+                if pdf_id:
+                    self.assessment_cache[pdf_id] = record
+        except Exception:
+            self.assessment_cache = {}
+
+    @staticmethod
+    def parse_blueprint(blueprint_value: Any) -> Optional[Dict[str, Any]]:
+        """Parse blueprint JSON safely"""
+        if not blueprint_value:
+            return None
+        try:
+            if isinstance(blueprint_value, str):
+                return json.loads(blueprint_value)
+            return blueprint_value
+        except Exception:
+            return None
+
+    def extract_pdf_id(self, blueprint_value: Any) -> Optional[str]:
+        """Extract pdf_id from blueprint content"""
+        blueprint_data = self.parse_blueprint(blueprint_value)
+        if blueprint_data:
+            pdf_id = blueprint_data.get("pdf_id")
+            if isinstance(pdf_id, str) and pdf_id.strip():
+                return pdf_id.strip()
+        return None
     
     def fetch_all_pdf_ids(self) -> List[str]:
         """
@@ -88,21 +144,14 @@ class AssessmentGenerator:
             List of unique PDF IDs
         """
         try:
-            print("\n📋 Fetching all unique PDF IDs from pdf_embeddings...")
-            
-            # Query: select distinct pdf_id from pdf_embeddings
             response = self.supabase_client.table("pdf_embeddings")\
                 .select("pdf_id")\
                 .execute()
             
             if not response.data:
-                print("⚠️  No PDFs found in pdf_embeddings table")
                 return []
             
-            # Get unique PDF IDs
             pdf_ids = list(set([row.get("pdf_id") for row in response.data if row.get("pdf_id")]))
-            
-            print(f"✓ Found {len(pdf_ids)} unique PDFs")
             return pdf_ids
             
         except Exception as e:
@@ -160,9 +209,111 @@ class AssessmentGenerator:
             
             return f"PDF {pdf_id[:8]}"
             
-        except Exception as e:
-            print(f"WARNING: Could not fetch PDF name for {pdf_id}: {str(e)}")
+        except Exception:
             return f"PDF {pdf_id[:8]}"
+    
+    def detect_course_name(self, pdf_title: Optional[str] = None, pdf_id: str = "") -> str:
+        """
+        Detect course name from PDF title or PDF ID
+        
+        Args:
+            pdf_title: PDF title from pdf_embeddings table
+            pdf_id: PDF ID as fallback
+        
+        Returns:
+            Course name (Python, DevOps, etc.)
+        """
+        # Combine title and ID for detection
+        search_text = ""
+        if pdf_title:
+            search_text = pdf_title.lower()
+        if pdf_id:
+            search_text += " " + pdf_id.lower()
+        
+        search_text = search_text.strip()
+        
+        # Detection rules - CHECK DEVOPS FIRST (more specific indicators)
+        # DevOps course indicators (check first to avoid false positives)
+        devops_indicators = [
+            "devops", "docker", "kubernetes", "k8s", "jenkins", 
+            "sonarqube", "linux", "git", "ci/cd", "terraform", 
+            "ansible", "aws", "azure", "gcp", "networking", "cloud",
+            "container", "orchestration", "deployment", "infrastructure"
+        ]
+        
+        # Python course indicators (more specific to avoid conflicts)
+        python_indicators = [
+            "python", "datatypes", "loops", "functions", "classes",
+            "list", "dict", "tuple", "set", "comprehension", "decorator",
+            "generator", "iterator", "exception", "import", "package"
+        ]
+        
+        # Check for DevOps FIRST (more specific indicators take priority)
+        if any(indicator in search_text for indicator in devops_indicators):
+            return "DevOps"
+        
+        # Check for Python (only if no DevOps indicators found)
+        if any(indicator in search_text for indicator in python_indicators):
+            return "Python"
+        
+        # Check for module patterns - need context to determine course
+        # If it contains DevOps-related terms, it's DevOps
+        if "module" in search_text:
+            # Check if it's a DevOps module by looking for DevOps keywords
+            devops_module_keywords = ["docker", "kubernetes", "sonarqube", "networking", 
+                                     "cloud", "devops", "linux", "jenkins", "terraform"]
+            if any(keyword in search_text for keyword in devops_module_keywords):
+                return "DevOps"
+            # Otherwise, assume Python for backward compatibility
+            return "Python"
+        
+        # Default to Python if no match (for backward compatibility)
+        return "Python"
+    
+    def get_or_create_course(self, course_name: str) -> Optional[str]:
+        """
+        Get course_id from courses table, create if it doesn't exist
+        
+        Args:
+            course_name: Course name (e.g., "Python", "DevOps")
+        
+        Returns:
+            Course ID (UUID string) if successful, None otherwise
+        """
+        try:
+            # Normalize course name
+            course_name = course_name.strip()
+            if not course_name:
+                print("ERROR: Course name is empty")
+                return None
+            
+            # Try to fetch existing course
+            response = self.supabase_client.table("courses")\
+                .select("id")\
+                .eq("name", course_name)\
+                .limit(1)\
+                .execute()
+            
+            if response.data and len(response.data) > 0:
+                course_id = str(response.data[0]["id"])
+                return course_id
+            
+            create_response = self.supabase_client.table("courses")\
+                .insert({
+                    "name": course_name,
+                    "description": f"{course_name} course assessments"
+                })\
+                .execute()
+            
+            if create_response.data and len(create_response.data) > 0:
+                course_id = str(create_response.data[0]["id"])
+                return course_id
+            else:
+                return None
+                
+        except Exception as e:
+            print(f"❌ ERROR: Failed to get/create course {course_name}: {str(e)}")
+            return None
     
     def extract_knowledge_from_content(self, chunks: List[str]) -> Dict[str, Any]:
         """
@@ -236,11 +387,9 @@ PDF Content:
                 content = content.split("```")[1].split("```")[0].strip()
             
             knowledge = json.loads(content)
-            print(f"✓ Extracted knowledge: {len(knowledge.get('topics', []))} topics, {len(knowledge.get('code_examples', []))} code examples")
             return knowledge
             
-        except Exception as e:
-            print(f"WARNING: Knowledge extraction failed: {str(e)}. Continuing with raw content...")
+        except Exception:
             return {}
     
     def validate_question(self, question: Dict[str, Any]) -> bool:
@@ -341,11 +490,8 @@ PDF Content:
             List of question dictionaries
         """
         if not chunks:
-            print("ERROR: No chunks provided for question generation")
             return []
         
-        # Step 1: Extract structured knowledge from content
-        print("  → Extracting knowledge from PDF content...")
         knowledge = self.extract_knowledge_from_content(chunks)
         
         # Combine chunks into context for question generation
@@ -513,58 +659,37 @@ PDF Content:
                         if not q.get("topic") or not str(q.get("topic", "")).strip():
                             issues.append("missing topic")
                         
-                        if invalid_count <= 3:  # Only show first 3 invalid questions
-                            print(f"WARNING: Invalid question skipped: {question_text}... (Reason: {', '.join(issues) if issues else 'validation failed'})")
-                
-                if invalid_count > 3:
-                    print(f"WARNING: ... and {invalid_count - 3} more invalid questions")
-                
-                # If we have invalid questions but need more, try to regenerate them
                 if len(valid_questions) < NUM_QUESTIONS_PER_PDF and invalid_questions and attempt < MAX_RETRIES - 1:
-                    needed = NUM_QUESTIONS_PER_PDF - len(valid_questions)
-                    print(f"  → Regenerating {needed} invalid questions...")
-                    # Will retry in next iteration
+                    time.sleep(RETRY_DELAY)
+                    continue
                 
                 # Accept if we have at least 18 questions (90% of target)
                 min_acceptable = max(18, NUM_QUESTIONS_PER_PDF - 2)
                 
                 if len(valid_questions) >= NUM_QUESTIONS_PER_PDF:
-                    print(f"✓ Generated {len(valid_questions)} valid questions")
-                    return valid_questions[:NUM_QUESTIONS_PER_PDF]  # Return exactly 20
+                    return valid_questions[:NUM_QUESTIONS_PER_PDF]
                 elif len(valid_questions) >= min_acceptable:
-                    print(f"⚠️  Generated {len(valid_questions)} valid questions (expected {NUM_QUESTIONS_PER_PDF}, but acceptable)")
                     return valid_questions
                 elif len(valid_questions) > 0:
-                    print(f"WARNING: Generated {len(valid_questions)} valid questions, expected {NUM_QUESTIONS_PER_PDF}")
-                    # If we have some valid questions but not enough, retry
                     if attempt < MAX_RETRIES - 1:
-                        print(f"Retrying... (attempt {attempt + 2}/{MAX_RETRIES})")
                         time.sleep(RETRY_DELAY)
                         continue
                     else:
-                        print(f"ERROR: Only generated {len(valid_questions)} questions after all retries")
-                        return valid_questions if len(valid_questions) >= 15 else []  # Accept if at least 15
+                        return valid_questions if len(valid_questions) >= 15 else []
                 else:
-                    # No valid questions, retry
                     if attempt < MAX_RETRIES - 1:
-                        print(f"WARNING: No valid questions generated. Retrying... (attempt {attempt + 2}/{MAX_RETRIES})")
                         time.sleep(RETRY_DELAY)
                         continue
                     else:
-                        print("ERROR: Failed to generate valid questions after retries")
                         return []
                 
-            except json.JSONDecodeError as e:
-                print(f"ERROR: Invalid JSON response (attempt {attempt + 1}/{MAX_RETRIES}): {str(e)}")
+            except json.JSONDecodeError:
                 if attempt < MAX_RETRIES - 1:
-                    print(f"Retrying in {RETRY_DELAY} seconds...")
                     time.sleep(RETRY_DELAY)
                 else:
-                    print(f"Response content (first 500 chars): {content[:500] if 'content' in locals() else 'N/A'}")
                     return []
             
-            except Exception as e:
-                print(f"ERROR: Failed to generate questions (attempt {attempt + 1}/{MAX_RETRIES}): {str(e)}")
+            except Exception:
                 if attempt < MAX_RETRIES - 1:
                     time.sleep(RETRY_DELAY)
                 else:
@@ -578,7 +703,7 @@ PDF Content:
         
         Args:
             pdf_id: PDF ID to check
-        
+            
         Returns:
             Existing assessment ID if found, None otherwise
         """
@@ -612,60 +737,104 @@ PDF Content:
             print(f"⚠️  Warning: Could not check for existing assessment: {str(e)}")
             return None
     
+    def check_assessment_exists_by_pdf_id(self, pdf_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Check if an assessment exists for a PDF ID using direct query
+        Returns the full assessment record if found
+        
+        Args:
+            pdf_id: PDF ID to check
+            
+        Returns:
+            Assessment record dict if found, None otherwise
+        """
+        cached = self.assessment_cache.get(pdf_id)
+        if cached:
+            return cached
+
+        # Cache miss - refresh cache and check again
+        self._populate_assessment_cache()
+        return self.assessment_cache.get(pdf_id)
+    
     def check_questions_exist(self, assessment_id: str) -> bool:
         """
         Check if questions already exist for an assessment
+        Returns True if ANY questions exist, False otherwise
         
         Args:
             assessment_id: Assessment ID to check
-        
+            
         Returns:
             True if questions exist, False otherwise
         """
         try:
-            response = self.supabase_client.table("skill_assessment_questions")\
+            existing_q = self.supabase_client.table("skill_assessment_questions")\
                 .select("id")\
                 .eq("assessment_id", assessment_id)\
-                .limit(1)\
                 .execute()
             
-            return response.data is not None and len(response.data) > 0
-        except Exception as e:
-            print(f"⚠️  Warning: Could not check for existing questions: {str(e)}")
+            return existing_q.data is not None and len(existing_q.data) > 0
+        except Exception:
             return False
     
-    def create_assessment(self, pdf_id: str, num_questions: int, pdf_title: Optional[str] = None) -> Optional[str]:
+    def create_assessment(self, pdf_id: str, num_questions: int, pdf_title: Optional[str] = None, course_id: Optional[str] = None) -> Optional[str]:
         """
         Create assessment row in Supabase FIRST (before generating questions)
-        Checks for duplicates before creating.
+        STRICTLY checks for duplicates before creating.
         
         Args:
             pdf_id: PDF ID
             num_questions: Number of questions (expected 20)
             pdf_title: PDF title from pdf_embeddings table (optional)
+            course_id: Course ID (UUID string) - optional, will be detected if not provided
         
         Returns:
             Assessment ID if successful, None otherwise
         """
         try:
+            # STRICT DUPLICATE CHECK: Check if assessment already exists
+            existing = self.check_assessment_exists_by_pdf_id(pdf_id)
+            if existing:
+                return str(existing.get("id"))
+            
             # Use pdf_title for assessment title, with fallback
             if pdf_title and pdf_title.strip():
                 assessment_title = pdf_title.strip()
             else:
                 assessment_title = f"Assessment for {pdf_id}"
             
+            if not course_id:
+                course_name = self.detect_course_name(pdf_title, pdf_id)
+                course_id = self.get_or_create_course(course_name)
+            else:
+                # Get course name for skill_domain
+                try:
+                    course_response = self.supabase_client.table("courses")\
+                        .select("name")\
+                        .eq("id", course_id)\
+                        .limit(1)\
+                        .execute()
+                    course_name = course_response.data[0]["name"] if course_response.data else "Python"
+                except:
+                    course_name = "Python"
+            
             # Store pdf_id in blueprint JSON field
             blueprint_data = {"pdf_id": pdf_id}
+            
+            # Optional: Add unique hash for extra safety
+            unique_hash = hashlib.md5(pdf_id.encode()).hexdigest()
+            blueprint_data["unique_hash"] = unique_hash
             
             # Use exact structure as specified by user
             assessment_data = {
                 "title": assessment_title,
                 "description": f"Auto-generated assessment based on: {assessment_title}",
-                "skill_domain": "Python",
+                "skill_domain": course_name,  # Use course name as skill_domain
                 "question_count": num_questions,  # Using question_count to match schema
                 "status": "published",
                 "difficulty": "medium",
-                "blueprint": json.dumps(blueprint_data)  # Store pdf_id in blueprint
+                "blueprint": json.dumps(blueprint_data),  # Store pdf_id and hash in blueprint
+                "course_id": course_id  # Add course_id for course-based grouping
             }
             
             # Supabase SDK v2: insert() returns data by default, no .select() needed
@@ -673,23 +842,23 @@ PDF Content:
                 .insert(assessment_data)\
                 .execute()
             
-            # Validate the insert
             if not response.data or len(response.data) == 0:
-                print(f"❌ Failed to insert assessment: {response}")
                 raise Exception("Assessment insert returned empty data")
             
-            assessment_id = response.data[0]["id"]
+            new_record = response.data[0]
+            assessment_id = new_record["id"]
+
+            # Keep cache in sync so duplicate checks stay accurate
+            self.assessment_cache[pdf_id] = new_record
             return str(assessment_id)
                 
-        except Exception as e:
-            print(f"❌ ERROR: Failed to create assessment: {str(e)}")
-            print(f"Details: {e}")
+        except Exception:
             return None
     
     def insert_questions(self, assessment_id: str, questions: List[Dict[str, Any]], pdf_id: str) -> bool:
         """
         Insert all questions into skill_assessment_questions table
-        Checks for duplicates before inserting.
+        STRICTLY checks for duplicates before inserting.
         
         Args:
             assessment_id: Assessment ID to link questions
@@ -697,13 +866,19 @@ PDF Content:
             pdf_id: PDF ID to link questions to source
         
         Returns:
-            True if successful, False otherwise
+            True if successful or already exists, False otherwise
         """
         try:
-            # Check if questions already exist for this assessment
-            if self.check_questions_exist(assessment_id):
-                print(f"⚠️  Questions already exist for assessment {assessment_id}, skipping insertion")
-                return True  # Return True since questions already exist
+            # STRICT DUPLICATE CHECK: Check if questions already exist
+            existing_q = self.supabase_client.table("skill_assessment_questions")\
+                .select("id")\
+                .eq("assessment_id", assessment_id)\
+                .execute()
+            
+            if existing_q.data and len(existing_q.data) > 0:
+                return True
+            
+            # No questions exist - proceed with insertion
             
             # Prepare questions for insertion with all required fields
             # Note: question_type column does NOT exist in skill_assessment_questions table
@@ -728,17 +903,9 @@ PDF Content:
                 .insert(records)\
                 .execute()
             
-            if response.data:
-                print(f"✓ Inserted {len(response.data)} questions successfully")
-                return True
-            else:
-                print(f"❌ ERROR: Question insert returned no data")
-                print(f"Details: {response}")
-                return False
+            return bool(response.data)
                 
-        except Exception as e:
-            print(f"❌ ERROR: Failed to insert questions: {str(e)}")
-            print(f"Details: {e}")
+        except Exception:
             return False
     
     def generate_assessment_from_pdf(self, pdf_id: str) -> Optional[str]:
@@ -756,12 +923,6 @@ PDF Content:
             Assessment ID if successful, None otherwise
         """
         try:
-            print(f"\n{'='*50}")
-            print(f"Processing PDF: {pdf_id}")
-            print(f"{'='*50}")
-            
-            # Step 0: Fetch PDF title from pdf_embeddings table
-            print("Step 0: Fetching PDF title...")
             pdf_title = None
             try:
                 response = self.supabase_client.table("pdf_embeddings")\
@@ -772,183 +933,135 @@ PDF Content:
                 
                 if response.data and response.data[0].get("pdf_title"):
                     pdf_title = response.data[0].get("pdf_title")
-                    print(f"✓ Found PDF title: {pdf_title}")
-                else:
-                    print(f"⚠️  No pdf_title found, using fallback title")
-            except Exception as e:
-                print(f"⚠️  Could not fetch PDF title: {str(e)}, using fallback title")
+            except Exception:
+                pass
             
-            # Step 1: Check if assessment already exists, create if not
-            print("Step 1: Checking for existing assessment...")
-            existing_assessment_id = self.check_assessment_exists(pdf_id)
+            existing_assessment = self.check_assessment_exists_by_pdf_id(pdf_id)
             
-            if existing_assessment_id:
-                print(f"✓ Found existing assessment: {existing_assessment_id}")
+            if existing_assessment:
+                existing_assessment_id = str(existing_assessment.get("id"))
+                existing_course_id = existing_assessment.get("course_id")
+                if not existing_course_id:
+                    course_name = self.detect_course_name(pdf_title, pdf_id)
+                    course_id = self.get_or_create_course(course_name)
+                    if course_id:
+                        try:
+                            self.supabase_client.table("assessments")\
+                                .update({
+                                    "course_id": course_id,
+                                    "skill_domain": course_name
+                                })\
+                                .eq("id", existing_assessment_id)\
+                                .execute()
+                            existing_assessment["course_id"] = course_id
+                            self.assessment_cache[pdf_id] = existing_assessment
+                        except Exception:
+                            pass
+                
                 assessment_id = existing_assessment_id
                 
-                # Check if questions already exist
                 if self.check_questions_exist(assessment_id):
-                    print(f"✓ Assessment and questions already exist for PDF {pdf_id}")
-                    print(f"⏭️  Skipping PDF {pdf_id} (already processed)")
                     return assessment_id
-                else:
-                    print(f"⚠️  Assessment exists but no questions found, will generate questions...")
             else:
-                print("Step 1: Creating new assessment record...")
                 assessment_id = self.create_assessment(pdf_id, NUM_QUESTIONS_PER_PDF, pdf_title)
-                
                 if not assessment_id:
-                    print(f"❌ ERROR: Failed to create assessment for PDF {pdf_id}")
                     return None
-                
-                print(f"✓ Created assessment: {assessment_id}")
             
-            # Step 2: Fetch chunks
-            print("Step 2: Fetching content chunks...")
             chunks = self.fetch_pdf_chunks(pdf_id)
-            
             if not chunks:
-                print(f"❌ ERROR: No chunks found for PDF {pdf_id}")
                 return None
             
-            print(f"✓ Fetched {len(chunks)} chunks")
+            if self.check_questions_exist(assessment_id):
+                return assessment_id
             
-            # Step 3: Generate 20 questions from LLM (theory + code tracing)
-            print("Step 3: Generating questions using GPT...")
             questions = self.generate_questions_from_pdf_content(chunks)
-            
-            # Accept if we have at least 18 questions (90% of target)
             min_acceptable = max(18, NUM_QUESTIONS_PER_PDF - 2)
             
             if not questions or len(questions) < min_acceptable:
-                print(f"❌ ERROR: Failed to generate sufficient questions. Got {len(questions) if questions else 0}, need at least {min_acceptable}")
                 return None
             
-            if len(questions) != NUM_QUESTIONS_PER_PDF:
-                print(f"⚠️  Generated {len(questions)} questions instead of {NUM_QUESTIONS_PER_PDF}, but proceeding...")
-            
-            # Step 4: Insert all questions into skill_assessment_questions
-            print("Step 4: Inserting questions...")
             success = self.insert_questions(assessment_id, questions, pdf_id)
-            
             if not success:
-                print(f"❌ ERROR: Failed to insert questions for assessment {assessment_id}")
                 return None
-            
-            # Success logging
-            print(f"\n{'='*50}")
-            print(f"PDF: {pdf_id}")
-            print(f"Created assessment: {assessment_id}")
-            print(f"Inserted {len(questions)} questions")
-            print(f"Status: SUCCESS")
-            print(f"{'='*50}\n")
             
             return assessment_id
             
-        except Exception as e:
-            print(f"\nERROR: {str(e)}")
-            print(f"Details: {e}\n")
+        except Exception:
             return None
     
     def generate_all_assessments(self):
         """
         Main function to generate assessments for all PDFs
         """
-        print("\n" + "="*60)
-        print("🚀 Starting Assessment Generation for All PDFs")
-        print("="*60 + "\n")
-        
-        # Step 1: Fetch all PDF IDs
         pdf_ids = self.fetch_all_pdf_ids()
         
         if not pdf_ids:
-            print("No PDFs found. Exiting.")
             return
         
-        print(f"\n📊 Processing {len(pdf_ids)} PDFs...\n")
+        pdfs_to_process, skipped_pdfs = self._filter_pdfs_requiring_processing(pdf_ids)
         
-        # Step 2: Process each PDF
         successful = 0
         failed = 0
         
-        for i, pdf_id in enumerate(pdf_ids, 1):
-            print(f"\n[{i}/{len(pdf_ids)}] Processing PDF: {pdf_id}")
-            
+        for pdf_id in pdfs_to_process:
             try:
                 assessment_id = self.generate_assessment_from_pdf(pdf_id)
-                
                 if assessment_id:
                     successful += 1
                 else:
                     failed += 1
-                    print(f"⚠️  Skipping PDF {pdf_id} due to errors (continuing with others)...")
-            
-            except Exception as e:
+            except Exception:
                 failed += 1
-                print(f"ERROR: Unexpected error processing PDF {pdf_id}: {str(e)}")
-                print(f"Details: {e}")
-                print(f"⚠️  Skipping PDF {pdf_id} (continuing with others)...\n")
                 continue
-        
-        # Final summary
-        print("\n" + "="*60)
-        print("📊 FINAL SUMMARY")
-        print("="*60)
-        print(f"Total PDFs processed: {len(pdf_ids)}")
-        print(f"Successful: {successful} ✓")
-        print(f"Failed: {failed} ✗")
-        print("="*60 + "\n")
 
+        # Refresh cache to include newly created assessments
+        self._populate_assessment_cache()
 
-def test_insert_assessment(generator: AssessmentGenerator):
-    """
-    Quick test function to verify assessment insert works
-    """
-    try:
-        print("\n[TEST] Testing assessment insert...")
-        test_data = {
-            "title": "Test Assessment",
-            "description": "Testing",
-            "skill_domain": "Python",
-            "question_count": 5,
-            "status": "published",
-            "difficulty": "medium"
-        }
-        response = generator.supabase_client.table("assessments").insert(test_data).execute()
-        
-        if response.data and len(response.data) > 0:
-            test_id = response.data[0]["id"]
-            print(f"[TEST] ✓ Assessment insert successful! ID: {test_id}")
-            print(f"[TEST] Response data: {response.data[0]}")
-            return True
-        else:
-            print(f"[TEST] ❌ Assessment insert returned no data")
-            print(f"[TEST] Response: {response}")
-            return False
-    except Exception as e:
-        print(f"[TEST] ❌ Assessment insert test failed: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False
+        print(f"Total PDFs detected            : {len(pdf_ids)}")
+        print(f"Already processed / up-to-date : {len(skipped_pdfs)}")
+        print(f"Attempted this run             : {len(pdfs_to_process)}")
+        print(f"  ✔ Successful                 : {successful}")
+        print(f"  ✖ Failed                     : {failed}")
+
+    def _filter_pdfs_requiring_processing(self, pdf_ids: List[str]) -> Tuple[List[str], List[str]]:
+        """Return PDFs that still need assessments or questions"""
+        remaining: List[str] = []
+        skipped: List[str] = []
+
+        for pdf_id in pdf_ids:
+            existing = self.check_assessment_exists_by_pdf_id(pdf_id)
+
+            if not existing:
+                remaining.append(pdf_id)
+                continue
+
+            assessment_id = str(existing.get("id"))
+            existing_course_id = existing.get("course_id")
+
+            # Reprocess if course_id missing so course linkage is enforced
+            if not existing_course_id:
+                remaining.append(pdf_id)
+                continue
+
+            # Reprocess if assessment is missing questions
+            if not self.check_questions_exist(assessment_id):
+                remaining.append(pdf_id)
+                continue
+
+            skipped.append(pdf_id)
+
+        return remaining, skipped
 
 
 def main():
     """Main entry point"""
     try:
         generator = AssessmentGenerator()
-        
-        # Optional: Run test first (uncomment to enable)
-        # if not test_insert_assessment(generator):
-        #     print("\n[WARNING] Test insert failed. Continuing anyway...")
-        
         generator.generate_all_assessments()
     except KeyboardInterrupt:
-        print("\n\n⚠️  Process interrupted by user")
         sys.exit(1)
     except Exception as e:
-        print(f"\n\nERROR: Fatal error: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        print(f"ERROR: {str(e)}")
         sys.exit(1)
 
 

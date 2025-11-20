@@ -35,10 +35,6 @@ setup_logger("skill_assessment")
 async def lifespan(app: FastAPI):
     """Application lifespan events"""
     # Startup
-    logger.info("Starting Skill Assessment Builder API...")
-    logger.info(f"Environment: {'Development' if settings.DEBUG else 'Production'}")
-    logger.info(f"OpenAI Model: {settings.OPENAI_MODEL}")
-    logger.info(f"API Version: {settings.VERSION}")
     
     # Warn about placeholder credentials
     if "your-project" in settings.SUPABASE_URL or "your-supabase" in settings.SUPABASE_KEY:
@@ -50,14 +46,7 @@ async def lifespan(app: FastAPI):
     try:
         from app.services.profile_service import get_test_user_id, TEST_USER_EMAIL
         
-        logger.info("Checking for test user...")
-        test_user_id = get_test_user_id()
-        if test_user_id:
-            logger.info(f"✅ Default test user verified in Supabase: {TEST_USER_EMAIL}")
-            logger.info(f"   Test user ID: {test_user_id}")
-        else:
-            logger.warning("⚠️  Test user not available. Attempts may fail until a profile is created.")
-            logger.warning("   Please ensure auth.users has at least one user, then run the SQL shown in logs.")
+        get_test_user_id()
     except Exception as e:
         logger.warning(f"Error checking/creating test user: {str(e)}")
         # Don't fail startup if profile creation fails
@@ -78,11 +67,7 @@ async def lifespan(app: FastAPI):
             assessment_count = assessments_response.count if hasattr(assessments_response, 'count') else 0
             
             if assessment_count == 0:
-                logger.info("No assessments found. Auto-generating assessments from existing embeddings...")
-                # Run generation in background (non-blocking)
                 asyncio.create_task(asyncio.to_thread(assessment_generator.generate_all_assessments))
-            else:
-                logger.info(f"Found {assessment_count} existing assessments. Skipping auto-generation.")
         else:
             logger.warning("Supabase client not available. Cannot check for existing assessments.")
     except Exception as e:
@@ -97,7 +82,17 @@ async def lifespan(app: FastAPI):
     
     cleanup_task = asyncio.create_task(cache_cleanup_loop())
     
-    yield
+    try:
+        yield
+    except asyncio.CancelledError:
+        # Handle cancellation during hot reload gracefully
+        # This is expected when uvicorn reloads on file changes
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
+        # Don't re-raise - allow graceful shutdown during reload
     
     # Shutdown
     cleanup_task.cancel()
@@ -106,7 +101,6 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
     
-    logger.info("Shutting down Skill Assessment Builder API...")
 
 
 # Create FastAPI app
@@ -143,7 +137,6 @@ if debug_mode:
     # Use wildcard "*" which works best with Vite proxy
     cors_origins = ["*"]
     cors_allow_credentials = False
-    logger.info("Development mode: Allowing all CORS origins for easier frontend-backend communication")
 else:
     # In production, use settings but ensure common frontend ports are included
     cors_origins = settings.cors_origins_list.copy() if settings.cors_origins_list else []
@@ -165,7 +158,6 @@ else:
     cors_allow_credentials = True if cors_origins else False
 
 # Log CORS configuration for debugging
-logger.info(f"CORS Configuration: allow_origins={cors_origins}, allow_credentials={cors_allow_credentials}, DEBUG={debug_mode}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -197,17 +189,18 @@ async def request_id_and_timing_middleware(request: Request, call_next):
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Process-Time"] = f"{process_time:.2f}ms"
     
-    # Log request
-    logger.info(
-        f"{request.method} {request.url.path}",
-        extra={
-            "request_id": request_id,
-            "method": request.method,
-            "path": request.url.path,
-            "status_code": response.status_code,
-            "duration_ms": process_time
-        }
-    )
+    # Log only errors
+    if response.status_code >= 400:
+        logger.error(
+            f"{request.method} {request.url.path} - {response.status_code}",
+            extra={
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "duration_ms": process_time
+            }
+        )
     
     return response
 
@@ -315,7 +308,6 @@ FRONTEND_DIR = PROJECT_ROOT / "frontend"
 if FRONTEND_DIR.exists():
     try:
         app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
-        logger.info(f"Frontend files mounted from: {FRONTEND_DIR}")
     except Exception as e:
         logger.warning(f"Could not mount frontend directory: {str(e)}")
 else:
