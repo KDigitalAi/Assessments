@@ -203,7 +203,16 @@
     </div>
 
     <script>
-        const API_BASE_URL = 'http://127.0.0.1:8000/api';
+        // API Configuration - Auto-detect environment
+        // Use relative URL for production (Vercel), localhost for development
+        const API_BASE_URL = (() => {
+            // If running on localhost, use localhost API
+            if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+                return 'http://127.0.0.1:8000/api';
+            }
+            // For production (Vercel), use relative URL (same origin)
+            return '/api';
+        })();
         
         // Get attempt_id from URL parameters
         function getUrlParameter(name) {

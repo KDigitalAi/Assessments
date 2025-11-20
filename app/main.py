@@ -129,16 +129,19 @@ app = FastAPI(
 # Always allow all origins in development (check DEBUG env var or default to permissive for local dev)
 # Force development mode if running on localhost/127.0.0.1
 is_localhost = os.getenv("HOST", "127.0.0.1") in ("127.0.0.1", "localhost", "0.0.0.0")
-debug_mode = settings.DEBUG or os.getenv("DEBUG", "True").lower() in ("true", "1", "yes") or is_localhost
+# Check if running on Vercel (production)
+is_vercel = os.getenv("VERCEL") == "1" or "vercel.app" in os.getenv("VERCEL_URL", "")
+debug_mode = (settings.DEBUG or os.getenv("DEBUG", "True").lower() in ("true", "1", "yes") or is_localhost) and not is_vercel
 
-# In development mode, allow all origins for easier frontend-backend communication
-if debug_mode:
-    # In development, always allow all origins for maximum compatibility
-    # Use wildcard "*" which works best with Vite proxy
+# In development mode or on Vercel, allow all origins for easier frontend-backend communication
+# On Vercel, frontend and backend are same-origin, but allow all for flexibility
+if debug_mode or is_vercel:
+    # In development or Vercel, always allow all origins for maximum compatibility
+    # Use wildcard "*" which works best with Vite proxy and Vercel deployments
     cors_origins = ["*"]
     cors_allow_credentials = False
 else:
-    # In production, use settings but ensure common frontend ports are included
+    # In production (non-Vercel), use settings but ensure common frontend ports are included
     cors_origins = settings.cors_origins_list.copy() if settings.cors_origins_list else []
     # Always include common frontend ports for compatibility
     common_origins = [
