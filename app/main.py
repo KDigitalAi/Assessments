@@ -270,16 +270,22 @@ async def health_check():
             except Exception as e:
                 logger.warning(f"Validation check failed: {str(e)}")
         
+        # Check environment (Vercel vs local)
+        is_vercel_env = os.getenv("VERCEL") == "1" or "vercel.app" in os.getenv("VERCEL_URL", "")
+        environment = "vercel" if is_vercel_env else "local"
+        
         response = {
             "status": "healthy",
             "version": settings.VERSION,
             "service": settings.PROJECT_NAME,
+            "environment": environment,
             "checks": {
                 "supabase": {
                     "status": supabase_status,
                     "test": supabase_test,
                     "url_configured": bool(settings.SUPABASE_URL and "your-project" not in settings.SUPABASE_URL),
-                    "key_configured": bool(settings.SUPABASE_KEY and "your-supabase" not in settings.SUPABASE_KEY)
+                    "key_configured": bool(settings.SUPABASE_KEY and "your-supabase" not in settings.SUPABASE_KEY),
+                    "url_preview": settings.SUPABASE_URL[:30] + "..." if settings.SUPABASE_URL and len(settings.SUPABASE_URL) > 30 else (settings.SUPABASE_URL or "NOT SET")
                 },
                 "openai": openai_status,
                 "cache": cache_stats

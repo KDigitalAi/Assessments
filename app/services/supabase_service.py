@@ -24,7 +24,10 @@ class SupabaseService:
             # Enhanced validation with clear error messages
             # Validate that required settings are present
             if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
-                logger.error("[WARN] Supabase credentials missing. Database features unavailable. Please configure SUPABASE_URL and SUPABASE_KEY in .env file.")
+                logger.error("❌ [CRITICAL] Supabase credentials missing!")
+                logger.error("   SUPABASE_URL: " + (settings.SUPABASE_URL[:50] + "..." if settings.SUPABASE_URL else "NOT SET"))
+                logger.error("   SUPABASE_KEY: " + (settings.SUPABASE_KEY[:20] + "..." if settings.SUPABASE_KEY else "NOT SET"))
+                logger.error("   SOLUTION: Set SUPABASE_URL and SUPABASE_KEY environment variables in Vercel project settings")
                 self.client = None
                 return
             
@@ -41,9 +44,14 @@ class SupabaseService:
             )
             
             if is_placeholder_url or is_placeholder_key:
-                logger.error("[WARN] Supabase credentials appear to be placeholders. Please update your .env file with actual Supabase credentials.")
-                logger.error(f"[WARN] Current URL: {settings.SUPABASE_URL[:50]}...")
-                logger.error(f"[WARN] Current KEY: {settings.SUPABASE_KEY[:20]}...")
+                logger.error("❌ [CRITICAL] Supabase credentials appear to be placeholders!")
+                logger.error(f"   Current URL: {settings.SUPABASE_URL[:50]}...")
+                logger.error(f"   Current KEY: {settings.SUPABASE_KEY[:20]}...")
+                logger.error("   SOLUTION: Update environment variables in Vercel:")
+                logger.error("   1. Go to Vercel Dashboard → Your Project → Settings → Environment Variables")
+                logger.error("   2. Add SUPABASE_URL with your Supabase project URL")
+                logger.error("   3. Add SUPABASE_KEY with your Supabase anon/public key")
+                logger.error("   4. Redeploy the application")
                 self.client = None
                 return
             
@@ -58,21 +66,28 @@ class SupabaseService:
                 logger.warning(f"[WARN] SUPABASE_KEY seems too short ({len(settings.SUPABASE_KEY)} chars). Please verify it's correct.")
             
             # Create client
+            logger.info(f"🔌 Initializing Supabase client with URL: {settings.SUPABASE_URL[:30]}...")
             self.client = create_client(
                 settings.SUPABASE_URL,
                 settings.SUPABASE_KEY
             )
+            logger.info("✅ Supabase client created successfully")
             
             # Test connection with a simple query
             try:
                 # Try to query a table that should exist (or at least check if we can connect)
                 # This is a lightweight test that doesn't require any specific table
                 _ = self.client.table("profiles").select("id").limit(0).execute()
+                logger.info("✅ Supabase connection test passed")
             except Exception as test_error:
                 # If profiles table doesn't exist, that's okay - we just want to verify connection works
                 error_msg = str(test_error).lower()
                 if "does not exist" not in error_msg and "relation" not in error_msg:
-                    logger.warning(f"[WARN] Supabase client initialized but connection test failed: {str(test_error)}")
+                    logger.warning(f"⚠️  Supabase client initialized but connection test failed: {str(test_error)}")
+                    # Check for RLS issues
+                    if "row-level security" in error_msg or "permission denied" in error_msg:
+                        logger.warning("   ⚠️  This might be a Row Level Security (RLS) issue.")
+                        logger.warning("   SOLUTION: Check RLS policies in Supabase dashboard")
                     
         except Exception as e:
             logger.error(f"[WARN] Failed to initialize Supabase client: {str(e)}. Database features may be unavailable.")

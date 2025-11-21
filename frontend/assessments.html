@@ -132,16 +132,8 @@
     </div>
 
     <script>
-        // API Configuration - Auto-detect environment
-        // Use relative URL for production (Vercel), localhost for development
-        const API_BASE_URL = (() => {
-            // If running on localhost, use localhost API
-            if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-                return 'http://127.0.0.1:8000/api';
-            }
-            // For production (Vercel), use relative URL (same origin)
-            return '/api';
-        })();
+        // API Configuration - Use dynamic base URL
+        const BASE_URL = window.location.origin;
 
         // Get course_id from URL parameter or localStorage (fallback)
         const urlParams = new URLSearchParams(window.location.search);
@@ -165,7 +157,7 @@
         async function loadAssessments() {
             try {
                 // Use course_id instead of course name
-                const response = await fetch(`${API_BASE_URL}/assessments/by_course/${courseId}`);
+                const response = await fetch(`${BASE_URL}/api/assessments/by_course/${courseId}`);
                 
                 if (!response.ok) {
                     const errorData = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
@@ -289,7 +281,7 @@
 
                 
                 // Fetch questions from backend
-                const response = await fetch(`${API_BASE_URL}/assessments/${assessmentId}/questions`);
+                const response = await fetch(`${BASE_URL}/api/assessments/${assessmentId}/questions`);
                 
                 if (!response.ok) {
                     const errorData = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));

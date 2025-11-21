@@ -1,13 +1,5 @@
-// API Configuration - Auto-detect environment
-// Use relative URL for production (Vercel), localhost for development
-const API_BASE_URL = (() => {
-    // If running on localhost, use localhost API
-    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-        return 'http://127.0.0.1:8000/api';
-    }
-    // For production (Vercel), use relative URL (same origin)
-    return '/api';
-})();
+// API Configuration - Use dynamic base URL
+const BASE_URL = window.location.origin;
 
 // State
 let currentAttemptId = null;
@@ -44,7 +36,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // Refresh chart data from backend
 async function refreshChartData() {
     try {
-        const response = await fetch(`${API_BASE_URL}/getProgress`);
+        const response = await fetch(`${BASE_URL}/api/getProgress`);
         const data = await response.json();
         
         if (data.success) {
@@ -134,7 +126,24 @@ function getDifficultyText(difficulty) {
 // API Functions
 async function loadCourses() {
     try {
-        const response = await fetch(`${API_BASE_URL}/getAssessments`);
+        const response = await fetch(`${BASE_URL}/api/getAssessments`);
+        
+        // Check if response is ok
+        if (!response.ok) {
+            const errorText = await response.text();
+            let errorData;
+            try {
+                errorData = JSON.parse(errorText);
+            } catch {
+                errorData = { detail: `HTTP ${response.status}: ${errorText}` };
+            }
+            
+            console.error('❌ API Error:', errorData);
+            const errorMessage = errorData.detail || errorData.error || `Failed to load courses (HTTP ${response.status})`;
+            document.getElementById('coursesList').innerHTML = `<p class="error-message">${errorMessage}</p>`;
+            return;
+        }
+        
         const data = await response.json();
 
         if (data.success) {
@@ -146,12 +155,14 @@ async function loadCourses() {
                 displayCourses(assessments);
             }
         } else {
-            console.error('Failed to load assessments');
-            document.getElementById('coursesList').innerHTML = '<p>No courses available</p>';
+            console.error('Failed to load assessments:', data);
+            const errorMsg = data.error || data.detail || 'Failed to load assessments';
+            document.getElementById('coursesList').innerHTML = `<p class="error-message">${errorMsg}</p>`;
         }
     } catch (error) {
-        console.error('Error loading courses:', error);
-        document.getElementById('coursesList').innerHTML = '<p>Error loading courses. Please try again later.</p>';
+        console.error('❌ Error loading courses:', error);
+        const errorMessage = error.message || 'Network error. Please check your connection and try again.';
+        document.getElementById('coursesList').innerHTML = `<p class="error-message">Error loading courses: ${errorMessage}</p>`;
     }
 }
 
@@ -344,7 +355,7 @@ async function startAssessmentById(assessmentId, skillName, numQuestions) {
         console.log(`Starting assessment: ${assessmentId}`);
         
         // Fetch questions from backend
-        const response = await fetch(`${API_BASE_URL}/assessments/${assessmentId}/questions`);
+        const response = await fetch(`${BASE_URL}/api/assessments/${assessmentId}/questions`);
         
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
@@ -499,7 +510,7 @@ async function submitAssessment() {
             answer: answers[questionId] || ''
         }));
 
-        const response = await fetch(`${API_BASE_URL}/submitAssessment`, {
+        const response = await fetch(`${BASE_URL}/api/submitAssessment`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -569,7 +580,7 @@ function resetAssessment() {
 
 async function loadProgress() {
     try {
-        const response = await fetch(`${API_BASE_URL}/getProgress`);
+        const response = await fetch(`${BASE_URL}/api/getProgress`);
         const data = await response.json();
 
         if (data.success) {
@@ -601,7 +612,7 @@ async function loadProgress() {
 
 async function loadRecentAssessments() {
     try {
-        const response = await fetch(`${API_BASE_URL}/getProgress`);
+        const response = await fetch(`${BASE_URL}/api/getProgress`);
         const data = await response.json();
 
         if (data.success && data.recent_assessments) {

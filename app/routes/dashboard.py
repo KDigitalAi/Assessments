@@ -46,25 +46,47 @@ async def get_assessments():
     try:
         client = supabase_service.get_client()
         if not client:
+            logger.error("❌ Supabase client not available in get_assessments endpoint")
+            logger.error("   This usually means SUPABASE_URL or SUPABASE_KEY environment variables are missing or incorrect")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database service unavailable"
+                detail="Database service unavailable. Please check server configuration."
             )
         
         # Get all courses
-        courses_response = client.table("courses")\
-            .select("*")\
-            .execute()
-        
-        courses = courses_response.data if courses_response.data else []
+        try:
+            courses_response = client.table("courses")\
+                .select("*")\
+                .execute()
+            
+            courses = courses_response.data if courses_response.data else []
+            logger.info(f"✅ Loaded {len(courses)} courses from database")
+        except Exception as courses_error:
+            logger.error(f"❌ Error loading courses: {str(courses_error)}")
+            # Check if it's an RLS issue
+            error_msg = str(courses_error).lower()
+            if "row-level security" in error_msg or "permission denied" in error_msg or "new row violates row-level security" in error_msg:
+                logger.error("   ⚠️  This appears to be a Row Level Security (RLS) issue.")
+                logger.error("   SOLUTION: Ensure RLS policies allow SELECT on 'courses' table for anonymous users.")
+            courses = []
         
         # Get all published assessments with course_id
-        assessments_response = client.table("assessments")\
-            .select("*")\
-            .eq("status", "published")\
-            .execute()
-        
-        assessments = assessments_response.data if assessments_response.data else []
+        try:
+            assessments_response = client.table("assessments")\
+                .select("*")\
+                .eq("status", "published")\
+                .execute()
+            
+            assessments = assessments_response.data if assessments_response.data else []
+            logger.info(f"✅ Loaded {len(assessments)} published assessments from database")
+        except Exception as assessments_error:
+            logger.error(f"❌ Error loading assessments: {str(assessments_error)}")
+            # Check if it's an RLS issue
+            error_msg = str(assessments_error).lower()
+            if "row-level security" in error_msg or "permission denied" in error_msg:
+                logger.error("   ⚠️  This appears to be a Row Level Security (RLS) issue.")
+                logger.error("   SOLUTION: Ensure RLS policies allow SELECT on 'assessments' table for anonymous users.")
+            assessments = []
         
         # Group assessments by course_id (convert to string for consistent comparison)
         course_assessments = {}
@@ -179,11 +201,25 @@ async def get_assessments():
             "courses": formatted_courses  # New format with unique source counts
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error getting assessments: {str(e)}")
+        error_msg = str(e).lower()
+        logger.error(f"❌ Error getting assessments: {str(e)}")
+        
+        # Provide helpful error messages based on error type
+        if "row-level security" in error_msg or "permission denied" in error_msg:
+            detail = "Database access denied. Please check Row Level Security (RLS) policies in Supabase."
+        elif "does not exist" in error_msg or "relation" in error_msg:
+            detail = "Database table not found. Please ensure all required tables exist in Supabase."
+        elif "service unavailable" in error_msg or "client not initialized" in error_msg:
+            detail = "Database service unavailable. Please check environment variables (SUPABASE_URL, SUPABASE_KEY) in Vercel settings."
+        else:
+            detail = f"Error fetching assessments: {str(e)}"
+        
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error fetching assessments: {str(e)}"
+            detail=detail
         )
 
 

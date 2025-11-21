@@ -1,13 +1,5 @@
-// API Configuration - Auto-detect environment
-// Use relative URL for production (Vercel), localhost for development
-const API_BASE_URL = (() => {
-    // If running on localhost, use localhost API
-    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-        return 'http://127.0.0.1:8000/api';
-    }
-    // For production (Vercel), use relative URL (same origin)
-    return '/api';
-})();
+// API Configuration - Use dynamic base URL
+const BASE_URL = window.location.origin;
 
 // State
 let currentAssessment = null;
@@ -28,7 +20,7 @@ async function autoStartAssessment() {
         document.getElementById('questionContainer').innerHTML = '<div class="loading">Loading assessment...</div>';
         
         // Step 1: Get available assessments
-        const assessmentsResponse = await fetch(`${API_BASE_URL}/getAssessments`);
+        const assessmentsResponse = await fetch(`${BASE_URL}/api/getAssessments`);
         if (!assessmentsResponse.ok) {
             throw new Error(`Failed to fetch assessments: HTTP ${assessmentsResponse.status}`);
         }
@@ -43,7 +35,7 @@ async function autoStartAssessment() {
         const assessmentId = firstAssessment.id;
         
         // Step 3: Fetch questions and create attempt
-        const questionsResponse = await fetch(`${API_BASE_URL}/assessments/${assessmentId}/questions`);
+        const questionsResponse = await fetch(`${BASE_URL}/api/assessments/${assessmentId}/questions`);
         if (!questionsResponse.ok) {
             const errorData = await questionsResponse.json().catch(() => ({ detail: `HTTP ${questionsResponse.status}` }));
             throw new Error(errorData.detail || errorData.error || `Failed to fetch questions: HTTP ${questionsResponse.status}`);
@@ -317,7 +309,7 @@ async function submitAssessment() {
         }));
 
         // Submit to backend
-        const response = await fetch(`${API_BASE_URL}/submitAssessment`, {
+        const response = await fetch(`${BASE_URL}/api/submitAssessment`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'

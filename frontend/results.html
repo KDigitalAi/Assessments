@@ -203,16 +203,8 @@
     </div>
 
     <script>
-        // API Configuration - Auto-detect environment
-        // Use relative URL for production (Vercel), localhost for development
-        const API_BASE_URL = (() => {
-            // If running on localhost, use localhost API
-            if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-                return 'http://127.0.0.1:8000/api';
-            }
-            // For production (Vercel), use relative URL (same origin)
-            return '/api';
-        })();
+        // API Configuration - Use dynamic base URL
+        const BASE_URL = window.location.origin;
         
         // Get attempt_id from URL parameters
         function getUrlParameter(name) {
@@ -225,7 +217,7 @@
             
             try {
                 if (attemptId) {
-                    const response = await fetch(`${API_BASE_URL}/attempts/${attemptId}/result`);
+                    const response = await fetch(`${BASE_URL}/api/attempts/${attemptId}/result`);
                     
                     let data;
                     try {

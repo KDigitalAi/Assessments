@@ -83,6 +83,12 @@ class Settings(BaseSettings):
         "case_sensitive": True,
         "extra": "ignore"  # Ignore extra fields in .env file (like FRONTEND_URL)
     }
+    
+    def __init__(self, **kwargs):
+        """Initialize settings with environment variable priority"""
+        # On Vercel, environment variables are set directly, not from .env file
+        # Pydantic will automatically read from os.environ
+        super().__init__(**kwargs)
 
 
 # Global settings instance
