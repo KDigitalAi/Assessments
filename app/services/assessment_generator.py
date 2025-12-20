@@ -22,7 +22,15 @@ class AssessmentGenerator:
     
     def _initialize_client(self):
         """Initialize Supabase client"""
-        self.client = supabase_service.get_client()
+        # Use service key for admin operations (creating assessments)
+        # This bypasses RLS policies
+        self.client = supabase_service.get_client(use_service_key=True)
+        
+        # Fallback to anon key if service key not available
+        if not self.client:
+            logger.warning("Service key client not available, falling back to anon key")
+            logger.warning("Admin operations (creating assessments) may fail due to RLS")
+            self.client = supabase_service.get_client(use_service_key=False)
     
     def get_all_video_sources(self) -> List[Dict[str, Any]]:
         """
@@ -203,6 +211,9 @@ class AssessmentGenerator:
         """
         Extract topic/skill domain from source name
         
+        For PDFs: Use the full PDF title to ensure each PDF gets its own unique course
+        For Videos: Use keyword matching or first word
+        
         Args:
             source_name: Video title or document name
             source_type: 'video' or 'pdf'
@@ -210,7 +221,17 @@ class AssessmentGenerator:
         Returns:
             Extracted topic/skill domain
         """
-        # Common skill domains
+        # For PDFs, use the full title to ensure uniqueness (one PDF = one course)
+        if source_type == "pdf":
+            # Use full PDF title as skill_domain to ensure each PDF is unique
+            # Clean up the title but keep it unique
+            cleaned_title = source_name.strip()
+            # Remove common prefixes/suffixes but keep the unique part
+            if cleaned_title:
+                return cleaned_title
+            return f"PDF {source_name[:30]}" if source_name else "General PDF"
+        
+        # For videos, use keyword matching (original logic)
         skill_keywords = {
             "react": "React",
             "javascript": "JavaScript",
@@ -543,8 +564,14 @@ class AssessmentGenerator:
             Created assessment record or None
         """
         try:
+            # Ensure we're using service key client for admin operations
+            # This bypasses RLS policies which block inserts with created_by=None
             if not self.client:
-                logger.error("Supabase client not available")
+                self.client = supabase_service.get_client(use_service_key=True)
+            
+            if not self.client:
+                logger.error("Supabase service client not available. Cannot create assessments.")
+                logger.error("SOLUTION: Add SUPABASE_SERVICE_KEY to your .env file")
                 return None
             
             # Calculate duration (1.5 minutes per question)
@@ -575,7 +602,7 @@ class AssessmentGenerator:
                 "passing_score": 70,
                 "status": "published",
                 "blueprint": json.dumps(blueprint),
-                "created_by": None,  # No user in no-auth mode
+                "created_by": None,  # System-generated assessment
                 "published_at": datetime.utcnow().isoformat()
             }
             
@@ -594,6 +621,10 @@ class AssessmentGenerator:
             
         except Exception as e:
             logger.error(f"Error creating assessment: {str(e)}")
+            # Provide helpful error message
+            if "row-level security" in str(e).lower():
+                logger.error("SOLUTION: Ensure SUPABASE_SERVICE_KEY is set in .env file")
+                logger.error("The service key bypasses RLS policies for admin operations")
             return None
     
     def generate_all_assessments(self) -> Dict[str, Any]:

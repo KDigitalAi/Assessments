@@ -89,7 +89,10 @@ async def get_assessments():
             assessments = []
         
         # Group assessments by course_id (convert to string for consistent comparison)
+        # Also handle assessments without course_id by grouping them by skill_domain
         course_assessments = {}
+        assessments_without_course = {}  # Group by skill_domain for assessments without course_id
+        
         for assessment in assessments:
             course_id = assessment.get("course_id")
             if course_id:
@@ -98,7 +101,12 @@ async def get_assessments():
                 if course_id_str not in course_assessments:
                     course_assessments[course_id_str] = []
                 course_assessments[course_id_str].append(assessment)
-                course_assessments[course_id_str].append(assessment)
+            else:
+                # Handle assessments without course_id - group by skill_domain
+                skill_domain = assessment.get("skill_domain", "General")
+                if skill_domain not in assessments_without_course:
+                    assessments_without_course[skill_domain] = []
+                assessments_without_course[skill_domain].append(assessment)
         
         # Format courses with assessment counts
         formatted_courses = []
@@ -146,9 +154,7 @@ async def get_assessments():
                 "assessments": course_assessments_list
             })
         
-        
-        # Format individual assessments for backward compatibility
-        # Normalize domain name function
+        # Normalize domain name function (used for both courses and assessments)
         def normalize_domain(raw_name: str) -> str:
             """Normalize course domain name."""
             if not raw_name or not isinstance(raw_name, str):
@@ -163,6 +169,47 @@ async def get_assessments():
             normalized_words = [word.capitalize() for word in words]
             return " ".join(normalized_words)
         
+        # Create virtual courses for assessments without course_id
+        # For PDFs: Create one course per assessment (one PDF = one course)
+        # Group by assessment title to ensure each PDF gets its own course
+        assessment_courses = {}
+        for skill_domain, skill_assessments in assessments_without_course.items():
+            for assessment in skill_assessments:
+                # Use assessment title as unique identifier for each PDF
+                # This ensures one PDF = one course
+                assessment_title = assessment.get("title", "")
+                assessment_id = assessment.get("id", "")
+                
+                # Create unique course key from title or use assessment ID
+                if assessment_title:
+                    # Use title as course identifier (each unique title = one course)
+                    course_key = assessment_title
+                    course_name = normalize_domain(assessment_title.replace(" Assessment", "").replace("_", " "))
+                else:
+                    # Fallback to assessment ID if no title
+                    course_key = f"assessment_{assessment_id}"
+                    course_name = normalize_domain(skill_domain)
+                
+                if course_key not in assessment_courses:
+                    assessment_courses[course_key] = {
+                        "id": f"assessment_{assessment_id}",
+                        "name": course_name,
+                        "skill_domain": course_name,
+                        "skill_name": course_name,
+                        "test_count": 0,
+                        "assessments": []
+                    }
+                
+                assessment_courses[course_key]["assessments"].append(assessment)
+                assessment_courses[course_key]["test_count"] += 1
+        
+        # Add all assessment-based courses to formatted_courses
+        for course_data in assessment_courses.values():
+            course_data["progress"] = min(course_data["test_count"] * 5, 100) if course_data["test_count"] > 0 else 0
+            formatted_courses.append(course_data)
+        
+        
+        # Format individual assessments for backward compatibility
         formatted_assessments = []
         for assessment in assessments:
             raw_skill = assessment.get("skill_domain", "Unknown")
@@ -579,7 +626,8 @@ async def start_assessment(
         user_id = None  # No user tracking in no-auth mode
         
         # Check if assessment exists for this skill, or create one
-        client = supabase_service.get_client()
+        # Use anon key for reading (respects RLS)
+        client = supabase_service.get_client(use_service_key=False)
         if not client:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -598,6 +646,14 @@ async def start_assessment(
         
         if not assessment:
             # Create assessment if it doesn't exist
+            # Use service key for admin operations (bypasses RLS)
+            admin_client = supabase_service.get_client(use_service_key=True)
+            if not admin_client:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Admin operations unavailable. Please configure SUPABASE_SERVICE_KEY."
+                )
+            
             assessment_data = {
                 "title": f"{request.skill_name} Assessment",
                 "skill_domain": request.skill_name,
@@ -606,10 +662,10 @@ async def start_assessment(
                 "duration_minutes": 30,
                 "passing_score": 60,
                 "status": "published",
-                "created_by": None  # No user tracking
+                "created_by": None  # System-generated assessment
             }
             
-            assessment_response = client.table("assessments").insert(assessment_data).execute()
+            assessment_response = admin_client.table("assessments").insert(assessment_data).execute()
             assessment = assessment_response.data[0] if assessment_response.data else None
         
         assessment_id = UUID(assessment["id"])

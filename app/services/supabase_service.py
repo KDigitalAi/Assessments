@@ -15,11 +15,13 @@ class SupabaseService:
     
     def __init__(self):
         """Initialize Supabase client"""
-        self.client: Optional[Client] = None
+        self.client: Optional[Client] = None  # Anon key client (for regular operations)
+        self.service_client: Optional[Client] = None  # Service key client (for admin operations)
         self._initialize_client()
+        self._initialize_service_client()
     
     def _initialize_client(self):
-        """Initialize Supabase client with configuration"""
+        """Initialize Supabase client with anon key (for regular operations)"""
         try:
             # Enhanced validation with clear error messages
             # Validate that required settings are present
@@ -27,7 +29,7 @@ class SupabaseService:
                 logger.error("❌ [CRITICAL] Supabase credentials missing!")
                 logger.error("   SUPABASE_URL: " + (settings.SUPABASE_URL[:50] + "..." if settings.SUPABASE_URL else "NOT SET"))
                 logger.error("   SUPABASE_KEY: " + (settings.SUPABASE_KEY[:20] + "..." if settings.SUPABASE_KEY else "NOT SET"))
-                logger.error("   SOLUTION: Set SUPABASE_URL and SUPABASE_KEY environment variables in Vercel project settings")
+                logger.error("   SOLUTION: Set SUPABASE_URL and SUPABASE_KEY environment variables")
                 self.client = None
                 return
             
@@ -47,11 +49,6 @@ class SupabaseService:
                 logger.error("❌ [CRITICAL] Supabase credentials appear to be placeholders!")
                 logger.error(f"   Current URL: {settings.SUPABASE_URL[:50]}...")
                 logger.error(f"   Current KEY: {settings.SUPABASE_KEY[:20]}...")
-                logger.error("   SOLUTION: Update environment variables in Vercel:")
-                logger.error("   1. Go to Vercel Dashboard → Your Project → Settings → Environment Variables")
-                logger.error("   2. Add SUPABASE_URL with your Supabase project URL")
-                logger.error("   3. Add SUPABASE_KEY with your Supabase anon/public key")
-                logger.error("   4. Redeploy the application")
                 self.client = None
                 return
             
@@ -65,13 +62,13 @@ class SupabaseService:
             if len(settings.SUPABASE_KEY) < 50:
                 logger.warning(f"[WARN] SUPABASE_KEY seems too short ({len(settings.SUPABASE_KEY)} chars). Please verify it's correct.")
             
-            # Create client
-            logger.info(f"🔌 Initializing Supabase client with URL: {settings.SUPABASE_URL[:30]}...")
+            # Create client with anon key
+            logger.info(f"🔌 Initializing Supabase client (anon key) with URL: {settings.SUPABASE_URL[:30]}...")
             self.client = create_client(
                 settings.SUPABASE_URL,
                 settings.SUPABASE_KEY
             )
-            logger.info("✅ Supabase client created successfully")
+            logger.info("✅ Supabase client (anon key) created successfully")
             
             # Test connection with a simple query
             try:
@@ -97,17 +94,69 @@ class SupabaseService:
             logger.error(f"[WARN]   3. Network connection to Supabase is available")
             self.client = None
     
-    def get_client(self) -> Optional[Client]:
-        """Get Supabase client instance"""
-        if not self.client:
-            self._initialize_client()
-        return self.client
+    def _initialize_service_client(self):
+        """Initialize Supabase client with service role key (for admin operations that bypass RLS)"""
+        try:
+            # Check if service key is configured
+            if not settings.SUPABASE_SERVICE_KEY:
+                logger.warning("⚠️  SUPABASE_SERVICE_KEY not configured. Admin operations may fail due to RLS.")
+                logger.warning("   SOLUTION: Add SUPABASE_SERVICE_KEY to your .env file for admin operations")
+                self.service_client = None
+                return
+            
+            # Check if service key is a placeholder
+            if "your-supabase" in settings.SUPABASE_SERVICE_KEY.lower() or "placeholder" in settings.SUPABASE_SERVICE_KEY.lower():
+                logger.warning("⚠️  SUPABASE_SERVICE_KEY appears to be a placeholder. Admin operations may fail.")
+                self.service_client = None
+                return
+            
+            # Validate service key format
+            if len(settings.SUPABASE_SERVICE_KEY) < 50:
+                logger.warning(f"[WARN] SUPABASE_SERVICE_KEY seems too short ({len(settings.SUPABASE_SERVICE_KEY)} chars). Please verify it's correct.")
+            
+            # Create client with service key
+            logger.info(f"🔌 Initializing Supabase service client (service key) with URL: {settings.SUPABASE_URL[:30]}...")
+            self.service_client = create_client(
+                settings.SUPABASE_URL,
+                settings.SUPABASE_SERVICE_KEY
+            )
+            logger.info("✅ Supabase service client (service key) created successfully")
+            
+        except Exception as e:
+            logger.error(f"[WARN] Failed to initialize Supabase service client: {str(e)}. Admin operations may be unavailable.")
+            self.service_client = None
     
-    def _ensure_client(self) -> Client:
-        """Ensure client is initialized and raise exception if not available"""
-        client = self.get_client()
+    def get_client(self, use_service_key: bool = False) -> Optional[Client]:
+        """
+        Get Supabase client instance
+        
+        Args:
+            use_service_key: If True, returns service key client (bypasses RLS). 
+                           If False, returns anon key client (respects RLS).
+        
+        Returns:
+            Supabase client instance or None if not initialized
+        """
+        if use_service_key:
+            if not self.service_client:
+                self._initialize_service_client()
+            return self.service_client
+        else:
+            if not self.client:
+                self._initialize_client()
+            return self.client
+    
+    def _ensure_client(self, use_service_key: bool = False) -> Client:
+        """
+        Ensure client is initialized and raise exception if not available
+        
+        Args:
+            use_service_key: If True, uses service key client for admin operations
+        """
+        client = self.get_client(use_service_key=use_service_key)
         if not client:
-            raise Exception("Supabase client not initialized. Please configure SUPABASE_URL and SUPABASE_KEY in .env file.")
+            key_type = "service key" if use_service_key else "anon key"
+            raise Exception(f"Supabase client ({key_type}) not initialized. Please configure SUPABASE_URL and SUPABASE_KEY in .env file.")
         return client
     
     # ============================================
@@ -145,16 +194,25 @@ class SupabaseService:
     # Assessment Operations
     # ============================================
     
-    def create_assessment(self, assessment_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Create a new assessment"""
+    def create_assessment(self, assessment_data: Dict[str, Any], use_service_key: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        Create a new assessment
+        
+        Args:
+            assessment_data: Assessment data dictionary
+            use_service_key: If True, uses service key client to bypass RLS (default: True for admin operations)
+        """
         try:
-            client = self.get_client()
+            client = self.get_client(use_service_key=use_service_key)
             if not client:
-                raise Exception("Supabase client not initialized. Please configure Supabase credentials.")
+                key_type = "service key" if use_service_key else "anon key"
+                raise Exception(f"Supabase client ({key_type}) not initialized. Please configure Supabase credentials.")
             response = client.table("assessments").insert(assessment_data).execute()
             return response.data[0] if response.data else None
         except Exception as e:
             logger.error(f"Error creating assessment: {str(e)}")
+            if "row-level security" in str(e).lower() and not use_service_key:
+                logger.error("SOLUTION: Ensure SUPABASE_SERVICE_KEY is set in .env file for admin operations")
             raise
     
     def get_assessment(self, assessment_id: UUID, use_cache: bool = True) -> Optional[Dict[str, Any]]:
