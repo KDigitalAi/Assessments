@@ -1,63 +1,65 @@
-# Skill Assessment Builder - AI-Powered Learning Platform
+# Skill Assessment Platform API
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104.1-green.svg)](https://fastapi.tiangolo.com/)
 [![Supabase](https://img.shields.io/badge/Supabase-2.22+-orange.svg)](https://supabase.com/)
 [![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4-purple.svg)](https://openai.com/)
 
-> Production-ready platform for creating, delivering, and evaluating skill assessments using OpenAI GPT-4 and vector embeddings.
+> **API-only backend service** for creating, delivering, and evaluating skill assessments using OpenAI GPT-4 and vector embeddings. Designed for integration with Edify frontend.
 
 ---
 
-## Overview
+## 🎯 Overview
 
-**Skill Assessment Builder** is a **PDF-based AI Assessment Platform** that automates the complete assessment lifecycle. This is a **self-contained system** using a **separate Supabase database** dedicated exclusively to assessments.
+**Skill Assessment Platform API** is a **backend-only REST API service** that automates the complete assessment lifecycle from PDF upload to results delivery. This service provides RESTful APIs for frontend applications (like Edify) to integrate assessment functionality.
 
 ### Complete Pipeline
 
 **PDF → Embeddings → Questions → Assessments → Courses → Attempts → Results**
 
 The system:
-- Uploads PDF documents via web interface
+- Accepts PDF document uploads via API
 - Extracts text and generates vector embeddings
 - Uses RAG (Retrieval-Augmented Generation) to generate contextual MCQ questions
 - Creates assessments organized by courses
-- Delivers assessments through a web interface
+- Delivers assessments through API endpoints
 - Automatically scores responses and provides AI-generated feedback
 
 ### Key Features
 
-- 📄 **PDF-Only System**: Upload and process PDF documents exclusively (no video, no chatbot)
+- 📄 **PDF-Based System**: Upload and process PDF documents exclusively
 - 🔄 **End-to-End Pipeline**: Complete workflow from PDF upload to assessment results
-- 🤖 **AI-Powered Question Generation**: Automatically generates MCQ questions from PDF content using OpenAI GPT-4
+- 🤖 **AI-Powered Question Generation**: Automatically generates MCQ questions from PDF content using OpenAI GPT-4o-mini
 - 🔍 **RAG-Powered**: Uses vector embeddings for context-aware question generation
 - 📚 **Course-Based Organization**: Organizes assessments by courses with automatic course detection
 - 🎯 **Automated Scoring**: Instant scoring for MCQ questions
 - 💬 **Personalized Feedback**: AI-generated feedback based on performance
 - 🔐 **JWT Authentication**: Secure authentication via Supabase Auth
 - 📊 **Progress Tracking**: Monitor user progress across courses and assessments
-- 🗄️ **Self-Contained Database**: Separate Supabase project dedicated to assessments
+- 🌐 **API-Only**: Clean REST API service ready for frontend integration
 
 ---
 
-## System Architecture
+## 🏗️ System Architecture
 
-The system consists of:
+### Components
 
-1. **FastAPI Backend**: RESTful API server handling all HTTP requests and serving static frontend files
+1. **FastAPI Backend**: RESTful API server providing REST APIs for assessment management
 2. **Supabase Database**: PostgreSQL with pgvector extension for storing assessments, questions, attempts, and embeddings
 3. **Supabase Auth**: JWT-based authentication and user management
 4. **OpenAI API**: Direct integration for question generation, embeddings, and feedback
-5. **Frontend Application**: HTML/JavaScript client served as static files by FastAPI
-6. **Service Layer**: Python services for assessment generation, RAG search, feedback generation, and database operations
+5. **Service Layer**: Python services for assessment generation, RAG search, feedback generation, and database operations
 
-### Complete Data Flow
+**Note**: This is an **API-only backend service**. Frontend UI is handled separately by the Edify team.
+
+### Data Flow
 
 **Phase 1: PDF Upload & Processing**
-1. User uploads PDF via web interface
+1. Frontend uploads PDF via `POST /api/pdf/upload`
 2. File stored in Supabase Storage (bucket: `pdfs`)
 3. PDF metadata recorded in `pdf_documents` table
 4. Processing status tracked in `pdf_processing_log`
+5. Background processing: Extract → Chunk → Embed
 
 **Phase 2: Text Extraction & Embedding**
 1. Extract text page-by-page from PDF
@@ -66,10 +68,11 @@ The system consists of:
 4. Store chunks and embeddings in `pdf_embeddings` table
 
 **Phase 3: Question Generation (RAG)**
-1. Perform vector similarity search on `pdf_embeddings`
-2. Retrieve relevant context chunks
-3. Generate MCQ questions using OpenAI GPT-4
-4. Store questions in `skill_assessment_questions` table
+1. Call `POST /api/generateAssessments`
+2. Perform vector similarity search on `pdf_embeddings`
+3. Retrieve relevant context chunks
+4. Generate MCQ questions using OpenAI GPT-4o-mini
+5. Store questions in `skill_assessment_questions` table
 
 **Phase 4: Assessment Creation**
 1. Group questions by topic/skill domain
@@ -77,18 +80,17 @@ The system consists of:
 3. Link to course via `course_id` in `courses` table
 
 **Phase 5: User Assessment**
-1. User authenticates via Supabase Auth (JWT token)
-2. Views courses and assessments via frontend
-3. Starts assessment → creates `attempts` record
-4. Answers questions → stored in `responses` table
+1. User authenticates via `POST /auth/login` (returns JWT token)
+2. Frontend calls `GET /api/getAssessments` to view courses
+3. User starts assessment → `GET /api/assessments/{id}/questions` creates `attempts` record
+4. User submits answers → `POST /api/submitAssessment` stores in `responses` table
 5. System scores answers automatically
 6. Generate AI feedback → stored in `results` table
-
-For detailed architecture documentation, see [ARCHITECTURE.tex](ARCHITECTURE.tex).
+7. Frontend retrieves results via `GET /api/attempts/{attempt_id}/result`
 
 ---
 
-## Technology Stack
+## 🛠️ Technology Stack
 
 ### Backend
 - **Python 3.10+**: Core programming language
@@ -107,14 +109,16 @@ For detailed architecture documentation, see [ARCHITECTURE.tex](ARCHITECTURE.tex
 - **OpenAI GPT-4o-mini**: LLM for question generation
 - **OpenAI text-embedding-3-small**: Embedding model for RAG search
 
-### Frontend
-- **HTML5/CSS3**: Structure and styling
-- **JavaScript (ES6+)**: Client-side logic
-- **Fetch API**: HTTP communication
+### API Features
+- **RESTful API**: Standard HTTP methods and status codes
+- **CORS**: Configured for Edify frontend integration
+- **JWT Authentication**: Bearer token-based auth
+- **Request Validation**: Pydantic models for request/response validation
+- **Error Handling**: Standardized error responses
 
 ---
 
-## Installation
+## 📦 Installation
 
 ### Prerequisites
 
@@ -122,7 +126,6 @@ For detailed architecture documentation, see [ARCHITECTURE.tex](ARCHITECTURE.tex
 - **Supabase Account** with a **NEW project** (separate from chatbot/RAG database)
 - **OpenAI API Key** (for question generation and embeddings)
 - **Git** (for cloning repository)
-- **PyPDF2** (for PDF text extraction): `pip install PyPDF2`
 
 ### Step 1: Clone Repository
 
@@ -177,7 +180,7 @@ CORS_ORIGINS=http://localhost:3000,http://localhost:5173
 
 ---
 
-## Supabase Setup
+## 🗄️ Supabase Setup
 
 ### Step 1: Create NEW Supabase Project
 
@@ -242,7 +245,7 @@ Should return exactly **10 rows**.
 
 ---
 
-## Running the Application
+## 🚀 Running the Application
 
 ### Local Development
 
@@ -256,173 +259,784 @@ Should return exactly **10 rows**.
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-### API Endpoints
-
-**PDF Upload & Processing:**
-- `POST /api/pdf/upload` - Upload PDF file
-- `GET /api/pdf/list` - List all uploaded PDFs
-- `GET /api/pdf/{pdf_id}/status` - Get PDF processing status
-
-**Assessment Generation:**
-- `POST /api/generateAssessments` - Generate assessments from PDFs
-- `POST /api/embeddings/sync` - Sync embeddings and generate assessments
-
-**Assessment Taking:**
-- `GET /api/getAssessments` - Get all assessments
-- `POST /api/startAssessment` - Start an assessment attempt
-- `POST /api/submitResponse` - Submit answer
-- `POST /api/submitAssessment` - Complete assessment
-
 ### Access Points
 
-- **Frontend Dashboard**: http://127.0.0.1:8000/
+- **API Root**: http://127.0.0.1:8000/ (returns API information)
 - **API Documentation (Swagger)**: http://127.0.0.1:8000/docs
+- **ReDoc Documentation**: http://127.0.0.1:8000/redoc
 - **Health Check**: http://127.0.0.1:8000/health
 
 ---
 
-## Usage
+## 📚 API Documentation
 
-### Generate Assessments from PDFs
+### Base URL
 
-**Using the API:**
-```bash
-curl -X POST http://127.0.0.1:8000/api/generateAssessments
-```
-
-**Using the Script:**
-```bash
-python scripts/generate_all_assessments.py
-```
-
-This process:
-1. Reads all PDF embeddings from the database
-2. Generates 10 MCQ questions per source using OpenAI
-3. Creates assessment records linked to courses
-4. Stores questions in the database
-
-### User Registration and Login
-
-**Register:**
-```bash
-curl -X POST http://127.0.0.1:8000/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"email": "user@example.com", "password": "password123", "name": "User Name"}'
-```
-
-**Login:**
-```bash
-curl -X POST http://127.0.0.1:8000/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email": "user@example.com", "password": "password123"}'
-```
-
-Returns JWT token to use in subsequent requests.
-
-### Take an Assessment
-
-1. Navigate to http://127.0.0.1:8000/
-2. Register/Login if required
-3. Select a course
-4. Click "START ASSESSMENT" on an assessment
-5. Answer questions
-6. Submit to see results and feedback
-
----
-
-## API Endpoints
+- **Development**: `http://localhost:8000`
+- **Production**: `https://your-backend-api.vercel.app`
 
 ### Authentication
 
-- `POST /auth/login` - User login (returns JWT token)
-- `POST /auth/register` - User registration
-- `GET /auth/me` - Get current user info (requires authentication)
+All authenticated endpoints require a Bearer token in the Authorization header:
 
-### Dashboard
-
-- `GET /api/getAssessments` - Get all courses with assessments
-- `GET /api/assessments/by_course/{course_id}` - Get assessments for a course
-- `GET /api/assessments/{assessment_id}/questions` - Get questions and create attempt
-- `POST /api/submitAssessment` - Submit answers and get results
-- `GET /api/attempts/{attempt_id}/result` - Get detailed results
-- `GET /api/getProgress` - Get user progress statistics
-
-### Assessment Generation
-
-- `POST /api/generateAssessments` - Generate assessments from embeddings
-- `GET /api/assessments/stats` - Get assessment statistics
-- `POST /api/embeddings/sync` - Sync embeddings (alias for generateAssessments)
-
-### System
-
-- `GET /health` - Health check with system status
-- `GET /docs` - Interactive API documentation (Swagger UI)
-
-For interactive API documentation, visit http://127.0.0.1:8000/docs
+```http
+Authorization: Bearer {access_token}
+```
 
 ---
 
-## Project Structure
+## 🔐 Authentication Endpoints
+
+### POST /auth/login
+
+User login - Returns JWT token for authenticated requests.
+
+**Request:**
+```json
+{
+  "email": "user@example.com",
+  "password": "password123"
+}
+```
+
+**Response:**
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer",
+  "user": {
+    "id": "uuid",
+    "email": "user@example.com",
+    "name": "User Name",
+    "profile": {...}
+  }
+}
+```
+
+**Status Codes:**
+- `200` - Success
+- `401` - Invalid credentials
+- `503` - Service unavailable
+
+---
+
+### POST /auth/register
+
+User registration - Creates new user account.
+
+**Request:**
+```json
+{
+  "email": "newuser@example.com",
+  "password": "password123",
+  "name": "New User"
+}
+```
+
+**Response:** Same as login
+
+**Status Codes:**
+- `201` - User created
+- `400` - Validation error
+- `409` - User already exists
+
+---
+
+### GET /auth/me
+
+Get current user information (requires authentication).
+
+**Headers:**
+```http
+Authorization: Bearer {access_token}
+```
+
+**Response:**
+```json
+{
+  "id": "uuid",
+  "email": "user@example.com",
+  "name": "User Name",
+  "profile": {...}
+}
+```
+
+**Status Codes:**
+- `200` - Success
+- `401` - Unauthorized
+
+---
+
+## 📊 Dashboard Endpoints
+
+### GET /api/getAssessments
+
+Get all courses with their assessments.
+
+**Headers:** (Optional - works without auth for public assessments)
+```http
+Authorization: Bearer {access_token}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "assessments": [
+    {
+      "id": "uuid",
+      "title": "Python Fundamentals",
+      "course_id": "uuid",
+      "course_name": "Python",
+      "difficulty": "medium",
+      "question_count": 10,
+      "status": "published"
+    }
+  ],
+  "courses": [
+    {
+      "id": "uuid",
+      "name": "Python",
+      "assessment_count": 5
+    }
+  ]
+}
+```
+
+**Status Codes:**
+- `200` - Success
+- `503` - Service unavailable
+
+---
+
+### GET /api/getProgress
+
+Get user progress statistics and recent assessments.
+
+**Headers:**
+```http
+Authorization: Bearer {access_token}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "total_assessments": 10,
+  "avg_score": 85.5,
+  "topic_mastery": {
+    "Python": 90.0,
+    "DevOps": 80.0
+  },
+  "recent_assessments": [...]
+}
+```
+
+**Status Codes:**
+- `200` - Success
+- `401` - Unauthorized
+- `503` - Service unavailable
+
+---
+
+### GET /api/assessments/by_course/{course_id}
+
+Get all assessments for a specific course.
+
+**Path Parameters:**
+- `course_id` (string, required): Course UUID
+
+**Headers:** (Optional)
+```http
+Authorization: Bearer {access_token}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "course": {
+    "id": "uuid",
+    "name": "Python"
+  },
+  "assessments": [
+    {
+      "id": "uuid",
+      "title": "Python Fundamentals",
+      "difficulty": "medium",
+      "question_count": 10
+    }
+  ]
+}
+```
+
+**Status Codes:**
+- `200` - Success
+- `404` - Course not found
+- `503` - Service unavailable
+
+---
+
+### GET /api/assessments/{assessment_id}/questions
+
+Get questions for an assessment and create an attempt.
+
+**Path Parameters:**
+- `assessment_id` (string, required): Assessment UUID
+
+**Headers:** (Optional - attempt will be created if authenticated)
+```http
+Authorization: Bearer {access_token}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "attempt_id": "uuid",
+  "assessment": {
+    "id": "uuid",
+    "title": "Python Fundamentals"
+  },
+  "questions": [
+    {
+      "id": "uuid",
+      "question": "What is Python?",
+      "options": ["A", "B", "C", "D"],
+      "type": "mcq",
+      "difficulty": "medium"
+    }
+  ]
+}
+```
+
+**Status Codes:**
+- `200` - Success
+- `404` - Assessment not found
+- `503` - Service unavailable
+
+---
+
+### POST /api/startAssessment
+
+Start an assessment with dynamic question generation (legacy endpoint).
+
+**Request:**
+```json
+{
+  "skill_name": "Python",
+  "num_questions": 10
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "attempt_id": "uuid",
+  "questions": [...]
+}
+```
+
+**Status Codes:**
+- `200` - Success
+- `400` - Bad request
+- `503` - Service unavailable
+
+---
+
+### POST /api/submitAssessment
+
+Submit assessment answers and get results.
+
+**Request:**
+```json
+{
+  "attempt_id": "uuid",
+  "answers": [
+    {
+      "question_id": "uuid",
+      "answer": "A"
+    }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "attempt_id": "uuid",
+  "score": 8,
+  "total_questions": 10,
+  "percentage": 80.0,
+  "passed": true,
+  "feedback": "Great job! You demonstrated strong understanding..."
+}
+```
+
+**Status Codes:**
+- `200` - Success
+- `400` - Bad request
+- `404` - Attempt not found
+- `503` - Service unavailable
+
+---
+
+### GET /api/attempts/{attempt_id}/result
+
+Get detailed results for a completed assessment attempt.
+
+**Path Parameters:**
+- `attempt_id` (string, required): Attempt UUID
+
+**Headers:** (Optional)
+```http
+Authorization: Bearer {access_token}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "attempt": {
+    "id": "uuid",
+    "score": 8,
+    "total_questions": 10,
+    "percentage": 80.0,
+    "passed": true
+  },
+  "results": [
+    {
+      "question_id": "uuid",
+      "question": "What is Python?",
+      "user_answer": "A",
+      "correct_answer": "A",
+      "is_correct": true,
+      "explanation": "..."
+    }
+  ]
+}
+```
+
+**Status Codes:**
+- `200` - Success
+- `404` - Attempt not found
+- `503` - Service unavailable
+
+---
+
+## 📄 PDF Upload Endpoints
+
+### POST /api/pdf/upload
+
+Upload a PDF file for processing.
+
+**Request:** Multipart form data
+- `file` (file, required): PDF file
+- `title` (string, optional): Custom title for PDF
+
+**Response:**
+```json
+{
+  "success": true,
+  "pdf_id": "uuid",
+  "title": "Document Title",
+  "status": "processing",
+  "message": "PDF uploaded successfully. Processing started."
+}
+```
+
+**Status Codes:**
+- `200` - Success
+- `400` - Invalid file format
+- `503` - Service unavailable
+
+---
+
+### GET /api/pdf/list
+
+List all uploaded PDFs.
+
+**Response:**
+```json
+{
+  "success": true,
+  "pdfs": [
+    {
+      "id": "uuid",
+      "title": "Document Title",
+      "status": "completed",
+      "created_at": "2024-01-01T00:00:00Z"
+    }
+  ]
+}
+```
+
+**Status Codes:**
+- `200` - Success
+- `503` - Service unavailable
+
+---
+
+### GET /api/pdf/{pdf_id}/status
+
+Get processing status of a PDF.
+
+**Path Parameters:**
+- `pdf_id` (string, required): PDF UUID
+
+**Response:**
+```json
+{
+  "success": true,
+  "pdf_id": "uuid",
+  "status": "completed",
+  "progress": 100,
+  "message": "Processing completed"
+}
+```
+
+**Status Codes:**
+- `200` - Success
+- `404` - PDF not found
+- `503` - Service unavailable
+
+---
+
+## 📁 Folder Upload Endpoints
+
+### POST /api/folder/upload
+
+Upload multiple PDFs as a course folder.
+
+**Request:** Multipart form data
+- `folder_name` (string, required): Course name
+- `files` (files, required): List of PDF files
+
+**Response:**
+```json
+{
+  "success": true,
+  "course_id": "uuid",
+  "course_name": "Python",
+  "uploaded_files": 5,
+  "message": "Folder uploaded successfully"
+}
+```
+
+**Status Codes:**
+- `200` - Success
+- `400` - Bad request
+- `503` - Service unavailable
+
+---
+
+### POST /api/folder/process-all
+
+Process all uploaded folders (admin endpoint).
+
+**Response:**
+```json
+{
+  "success": true,
+  "processed": 3,
+  "message": "All folders processed"
+}
+```
+
+**Status Codes:**
+- `200` - Success
+- `503` - Service unavailable
+
+---
+
+### GET /api/folder/list
+
+List all uploaded course folders.
+
+**Response:**
+```json
+{
+  "success": true,
+  "folders": [
+    {
+      "course_id": "uuid",
+      "course_name": "Python",
+      "file_count": 5
+    }
+  ]
+}
+```
+
+**Status Codes:**
+- `200` - Success
+- `503` - Service unavailable
+
+---
+
+## 🤖 Assessment Generation Endpoints
+
+### POST /api/generateAssessments
+
+Generate assessments from all existing PDF embeddings.
+
+**Note:** This is a long-running operation (may take several minutes).
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Generated 5 assessments from 5 sources",
+  "total_sources": 5,
+  "generated": 5,
+  "failed": 0,
+  "assessments": [...],
+  "failed_sources": []
+}
+```
+
+**Status Codes:**
+- `200` - Success
+- `500` - Generation failed
+- `503` - Service unavailable
+
+---
+
+### GET /api/assessments/stats
+
+Get statistics about generated assessments.
+
+**Response:**
+```json
+{
+  "success": true,
+  "total_assessments": 10,
+  "total_questions": 100,
+  "questions_by_difficulty": {
+    "easy": 30,
+    "medium": 50,
+    "hard": 20
+  }
+}
+```
+
+**Status Codes:**
+- `200` - Success
+- `503` - Service unavailable
+
+---
+
+### POST /api/embeddings/sync
+
+Sync embeddings: Convert all pdf_embeddings into questions and assessments (alias for generateAssessments).
+
+**Response:** Same as `/api/generateAssessments`
+
+---
+
+## 🏥 System Endpoints
+
+### GET /health
+
+Health check endpoint with system status.
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "version": "1.0.0",
+  "service": "Skill Capital AI Learning Platform",
+  "environment": "local",
+  "checks": {
+    "supabase": {
+      "status": "connected",
+      "test": "✅ Connection successful"
+    },
+    "openai": "configured",
+    "cache": {...}
+  },
+  "timestamp": 1234567890.0
+}
+```
+
+**Status Codes:**
+- `200` - Healthy
+- `503` - Unhealthy
+
+---
+
+### GET /
+
+Root endpoint - API information.
+
+**Response:**
+```json
+{
+  "message": "Skill Assessment Platform API",
+  "version": "1.0.0",
+  "docs": "/docs",
+  "health": "/health",
+  "api_prefix": "/api",
+  "auth_prefix": "/auth",
+  "note": "This is an API-only backend service. Frontend UI is handled by Edify."
+}
+```
+
+---
+
+## 📖 Usage Examples
+
+### Complete Assessment Flow
+
+#### 1. User Registration
+
+```bash
+curl -X POST http://localhost:8000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "password": "password123",
+    "name": "John Doe"
+  }'
+```
+
+#### 2. User Login
+
+```bash
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "password": "password123"
+  }'
+```
+
+Save the `access_token` from response.
+
+#### 3. Get All Assessments
+
+```bash
+curl -X GET http://localhost:8000/api/getAssessments \
+  -H "Authorization: Bearer {access_token}"
+```
+
+#### 4. Get Course Assessments
+
+```bash
+curl -X GET http://localhost:8000/api/assessments/by_course/{course_id} \
+  -H "Authorization: Bearer {access_token}"
+```
+
+#### 5. Start Assessment
+
+```bash
+curl -X GET http://localhost:8000/api/assessments/{assessment_id}/questions \
+  -H "Authorization: Bearer {access_token}"
+```
+
+Save the `attempt_id` from response.
+
+#### 6. Submit Assessment
+
+```bash
+curl -X POST http://localhost:8000/api/submitAssessment \
+  -H "Authorization: Bearer {access_token}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "attempt_id": "{attempt_id}",
+    "answers": [
+      {
+        "question_id": "uuid1",
+        "answer": "A"
+      },
+      {
+        "question_id": "uuid2",
+        "answer": "B"
+      }
+    ]
+  }'
+```
+
+#### 7. Get Results
+
+```bash
+curl -X GET http://localhost:8000/api/attempts/{attempt_id}/result \
+  -H "Authorization: Bearer {access_token}"
+```
+
+---
+
+### PDF Upload Flow
+
+#### 1. Upload PDF
+
+```bash
+curl -X POST http://localhost:8000/api/pdf/upload \
+  -F "file=@document.pdf" \
+  -F "title=My Document"
+```
+
+#### 2. Check Processing Status
+
+```bash
+curl -X GET http://localhost:8000/api/pdf/{pdf_id}/status
+```
+
+#### 3. Generate Assessments
+
+```bash
+curl -X POST http://localhost:8000/api/generateAssessments
+```
+
+---
+
+## 🏗️ Project Structure
 
 ```
 Assessments/
-├── app/                          # Backend application
-│   ├── main.py                   # FastAPI entry point
-│   ├── config.py                 # Configuration & settings
-│   ├── models/                   # Database models & schemas
-│   │   ├── schemas.py            # Pydantic schemas
-│   │   └── assessment_schema.sql    # Database schema (PDF-only)
-│   ├── routes/                   # API route handlers
-│   │   ├── dashboard.py          # Main dashboard endpoints
-│   │   ├── assessments.py        # Assessment generation endpoints
-│   │   └── auth.py               # Authentication endpoints
-│   ├── services/                 # Business logic services
-│   │   ├── assessment_generator.py
-│   │   ├── topic_question_service.py
-│   │   ├── rag_service.py
-│   │   ├── embedding_service.py
-│   │   ├── feedback_service.py
-│   │   ├── supabase_service.py
-│   │   └── profile_service.py
-│   └── utils/                    # Utility modules
-│       ├── logger.py
-│       ├── error_handler.py
-│       ├── auth.py               # JWT authentication
-│       ├── cache.py
-│       └── rate_limit.py
-├── frontend/                      # Frontend web application
-│   ├── index.html                # Main dashboard
-│   ├── assessments.html          # Course assessments
-│   ├── assessment.html            # Assessment taking page
-│   ├── results.html               # Results display
-│   ├── app.js                     # Main frontend logic
-│   ├── assessment.js              # Assessment logic
-│   └── styles.css                 # Styles
+├── api/
+│   └── index.py                    # Vercel serverless wrapper
+├── app/
+│   ├── main.py                     # FastAPI entry point (API-only)
+│   ├── config.py                   # Configuration & settings
+│   ├── models/                     # Database models & schemas
+│   │   ├── schemas.py              # Pydantic schemas
+│   │   └── assessment_schema.sql   # Database schema
+│   ├── routes/                     # API route handlers
+│   │   ├── dashboard.py            # Dashboard endpoints
+│   │   ├── assessments.py          # Assessment generation
+│   │   ├── auth.py                 # Authentication
+│   │   ├── pdf_upload.py           # PDF upload endpoints
+│   │   └── folder_upload.py        # Folder upload endpoints
+│   ├── services/                   # Business logic services
+│   │   ├── assessment_generator.py # Assessment generation
+│   │   ├── topic_question_service.py # Question generation
+│   │   ├── rag_service.py          # RAG search
+│   │   ├── embedding_service.py    # Embedding generation
+│   │   ├── feedback_service.py     # Feedback generation
+│   │   ├── pdf_processor.py        # PDF processing
+│   │   ├── folder_processor.py     # Folder processing
+│   │   ├── supabase_service.py     # Database service
+│   │   └── profile_service.py     # User profiles
+│   └── utils/                      # Utility modules
+│       ├── logger.py               # Logging
+│       ├── error_handler.py       # Error handling
+│       ├── auth.py                 # JWT authentication
+│       ├── cache.py                # Caching
+│       └── rate_limit.py          # Rate limiting
 ├── scripts/                        # Utility scripts
-│   └── generate_all_assessments.py
-├── requirements.txt               # Python dependencies
-├── start_backend.ps1              # Windows startup script
+│   ├── process_uploads.py          # Process uploaded PDFs
+│   └── ...
+├── requirements.txt                # Python dependencies
+├── vercel.json                     # Vercel deployment config
+├── .gitignore                      # Git ignore rules
 └── README.md                       # This file
 ```
 
 ---
 
-## Database Schema
-
-### Core Tables
-
-- **profiles**: User profiles linked to Supabase Auth users
-- **courses**: Course definitions (Python, DevOps, etc.)
-- **assessments**: Assessment configurations with blueprints (JSON containing question IDs)
-- **skill_assessment_questions**: Generated MCQ questions with options, correct answers, explanations
-- **attempts**: User assessment attempts with status, scores, timestamps
-- **responses**: Individual question responses with scores
-- **results**: Aggregated assessment results with AI-generated feedback
-- **pdf_embeddings**: PDF content chunks with vector embeddings (populated externally)
-
----
-
-## Configuration
+## ⚙️ Configuration
 
 ### Environment Variables
 
@@ -432,83 +1046,301 @@ Assessments/
 | `SUPABASE_KEY` | Yes | Supabase anon key | - |
 | `SUPABASE_SERVICE_KEY` | Recommended | Service role key (bypasses RLS) | - |
 | `OPENAI_API_KEY` | Yes | OpenAI API key | - |
-| `OPENAI_MODEL` | No | OpenAI model | `gpt-4o-mini` |
+| `OPENAI_MODEL` | No | OpenAI model for questions | `gpt-4o-mini` |
 | `OPENAI_EMBEDDING_MODEL` | No | Embedding model | `text-embedding-3-small` |
 | `DEBUG` | No | Debug mode | `True` |
 | `CORS_ORIGINS` | No | Comma-separated CORS origins | - |
 
+### CORS Configuration
+
+The API is configured to allow requests from Edify domains:
+
+**Production:**
+- `https://edify.com`
+- `https://www.edify.com`
+- `https://app.edify.com`
+
+**Development:**
+- `http://localhost:3000`
+- `http://localhost:5173`
+- `http://localhost:8080`
+
 ---
 
-## Deployment
+## 🚀 Deployment
 
-### Production Deployment
+### Vercel Deployment (Recommended)
 
-1. **Set Environment Variables** in your hosting platform:
-   - `SUPABASE_URL`, `SUPABASE_KEY`, `SUPABASE_SERVICE_KEY`
+1. **Connect Repository** to Vercel
+2. **Set Environment Variables** in Vercel dashboard:
+   - `SUPABASE_URL`
+   - `SUPABASE_KEY`
+   - `SUPABASE_SERVICE_KEY`
    - `OPENAI_API_KEY`
    - `DEBUG=False`
-   - `CORS_ORIGINS` (your production domain)
+3. **Deploy** - Vercel will automatically detect `vercel.json` and deploy
 
-2. **Deploy FastAPI Application**:
-   ```bash
-   uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
-   ```
+### Other Platforms
 
-3. **Frontend**: Served automatically by FastAPI (no separate deployment needed)
+**AWS Lambda:**
+- Use serverless framework or AWS SAM
+- Configure environment variables
+- Set up API Gateway
 
-4. **Database**: Use Supabase production instance
+**Docker:**
+```dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY . .
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
 
-### Deployment Platforms
-
-- **Vercel**: Serverless deployment (recommended)
-- **AWS**: EC2 or Lambda
-- **Heroku**: Platform-as-a-Service
-- **Railway**: Simple deployment
-
-### Production Considerations
-
-- Set `DEBUG=False` in production
-- Configure CORS origins for production domain
-- Use `SUPABASE_SERVICE_KEY` for admin operations
-- Enable RLS policies in Supabase
-- Configure rate limiting for production load
-- Set up monitoring and logging
+**Railway/Heroku:**
+- Set environment variables
+- Deploy via Git push
+- Ensure Python 3.10+ runtime
 
 ---
 
-## Troubleshooting
+## 🔌 Edify Integration Guide
+
+### Base API URL
+
+**Production:** `https://your-backend-api.vercel.app`  
+**Development:** `http://localhost:8000`
+
+### Authentication Flow
+
+1. **Register User:**
+   ```javascript
+   const response = await fetch('https://api.example.com/auth/register', {
+     method: 'POST',
+     headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({
+       email: 'user@example.com',
+       password: 'password123',
+       name: 'User Name'
+     })
+   });
+   const { access_token } = await response.json();
+   ```
+
+2. **Login:**
+   ```javascript
+   const response = await fetch('https://api.example.com/auth/login', {
+     method: 'POST',
+     headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({
+       email: 'user@example.com',
+       password: 'password123'
+     })
+   });
+   const { access_token } = await response.json();
+   localStorage.setItem('access_token', access_token);
+   ```
+
+3. **Use Token in Requests:**
+   ```javascript
+   const token = localStorage.getItem('access_token');
+   const response = await fetch('https://api.example.com/api/getAssessments', {
+     headers: {
+       'Authorization': `Bearer ${token}`,
+       'Content-Type': 'application/json'
+     }
+   });
+   ```
+
+### Key Endpoints for Edify
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/auth/login` | POST | User login |
+| `/auth/register` | POST | User registration |
+| `/auth/me` | GET | Get current user |
+| `/api/getAssessments` | GET | List all courses and assessments |
+| `/api/getProgress` | GET | Get user progress stats |
+| `/api/assessments/by_course/{id}` | GET | Get course assessments |
+| `/api/assessments/{id}/questions` | GET | Start assessment |
+| `/api/submitAssessment` | POST | Submit answers |
+| `/api/attempts/{id}/result` | GET | Get results |
+
+### Error Handling
+
+All errors follow this format:
+
+```json
+{
+  "detail": "Error message here"
+}
+```
+
+**Common Status Codes:**
+- `200` - Success
+- `201` - Created
+- `400` - Bad Request (validation error)
+- `401` - Unauthorized (invalid/missing token)
+- `404` - Not Found
+- `500` - Internal Server Error
+- `503` - Service Unavailable
+
+**Example Error Handling:**
+```javascript
+try {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Request failed');
+  }
+  const data = await response.json();
+  return data;
+} catch (error) {
+  console.error('API Error:', error);
+  // Handle error in UI
+}
+```
+
+---
+
+## 🗄️ Database Schema
+
+### Core Tables (7)
+
+1. **profiles** - User profiles linked to Supabase Auth
+2. **courses** - Course definitions
+3. **assessments** - Assessment configurations
+4. **skill_assessment_questions** - Generated MCQ questions
+5. **attempts** - User assessment attempts
+6. **responses** - Individual question responses
+7. **results** - Aggregated assessment results
+
+### PDF/RAG Tables (3)
+
+8. **pdf_documents** - PDF metadata
+9. **pdf_embeddings** - PDF content chunks with vector embeddings
+10. **pdf_processing_log** - Processing status tracking
+
+### Key Relationships
+
+```
+profiles (1) ──→ (many) attempts
+courses (1) ──→ (many) assessments
+assessments (1) ──→ (many) skill_assessment_questions
+attempts (1) ──→ (many) responses
+attempts (1) ──→ (1) results
+pdf_documents (1) ──→ (many) pdf_embeddings
+```
+
+---
+
+## 🐛 Troubleshooting
 
 ### Common Issues
 
 **"Supabase client not initialized"**
 - Check `.env` file has correct `SUPABASE_URL` and `SUPABASE_KEY`
 - Verify credentials are not placeholders
+- Ensure environment variables are set in deployment platform
 
 **"new row violates row-level security policy"**
 - Use `SUPABASE_SERVICE_KEY` for admin operations
 - Check RLS policies in Supabase Dashboard
+- Ensure authenticated requests include valid JWT token
 
 **"OpenAI API key not configured"**
 - Add `OPENAI_API_KEY` to `.env` file
 - Get key from https://platform.openai.com/api-keys
+- Verify key has sufficient credits
 
 **"Table does not exist"**
 - Run `app/models/assessment_schema.sql` in Supabase SQL Editor
 - Verify all 10 tables are created successfully
+- Check table names match exactly
 
 **"Invalid or expired token"**
 - Token may have expired (default: 1 hour)
 - Re-authenticate via `/auth/login`
 - Check Supabase Auth configuration
+- Ensure token is included in Authorization header
+
+**"CORS error"**
+- Verify frontend domain is in `EDIFY_FRONTEND_ORIGINS` list
+- Check CORS configuration in `app/main.py`
+- Ensure `allow_credentials` matches origin configuration
 
 **"Assessments not showing"**
 - Check assessments have `status = 'published'`
 - Verify `course_id` is set
-- Clear browser cache
+- Ensure user has proper permissions
+
+**"PDF processing stuck"**
+- Check `pdf_processing_log` table for errors
+- Verify OpenAI API key is valid
+- Check Supabase Storage bucket permissions
+- Review logs for processing errors
 
 ---
 
-## Contributing
+## 📝 API Response Formats
+
+### Success Response
+
+```json
+{
+  "success": true,
+  "data": {...},
+  "message": "Operation completed successfully"
+}
+```
+
+### Error Response
+
+```json
+{
+  "detail": "Error message describing what went wrong"
+}
+```
+
+### Pagination (if applicable)
+
+```json
+{
+  "success": true,
+  "data": [...],
+  "pagination": {
+    "page": 1,
+    "page_size": 20,
+    "total": 100,
+    "total_pages": 5
+  }
+}
+```
+
+---
+
+## 🔒 Security Considerations
+
+- **JWT Tokens**: Tokens expire after 1 hour (configurable)
+- **CORS**: Only Edify domains allowed in production
+- **RLS**: Row-level security enforced at database level
+- **Rate Limiting**: Implemented to prevent abuse
+- **Input Validation**: All inputs validated via Pydantic models
+- **Error Messages**: Sensitive information not exposed in errors
+
+---
+
+## 📊 Monitoring & Logging
+
+- **Health Check**: `/health` endpoint for monitoring
+- **Structured Logging**: JSON-formatted logs
+- **Request IDs**: Each request has unique ID for tracing
+- **Error Tracking**: Errors logged with full context
+- **Performance Metrics**: Request timing tracked
+
+---
+
+## 🤝 Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
@@ -518,13 +1350,13 @@ Assessments/
 
 ---
 
-## License
+## 📄 License
 
 This project is licensed under the MIT License.
 
 ---
 
-## Acknowledgments
+## 🙏 Acknowledgments
 
 - **FastAPI** - Modern web framework
 - **Supabase** - Backend-as-a-Service
@@ -533,4 +1365,15 @@ This project is licensed under the MIT License.
 
 ---
 
+## 📞 Support
+
+For API questions or issues:
+- Check interactive API docs at `/docs`
+- Review health check at `/health`
+- Contact backend team
+
+---
+
 **Made with ❤️ using FastAPI, Supabase, and OpenAI**
+
+**API-Only Backend Service - Ready for Edify Integration**

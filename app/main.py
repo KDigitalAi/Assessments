@@ -4,8 +4,9 @@ FastAPI main application entry point with improved security and error handling
 
 from fastapi import FastAPI, Request, status, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
+# FRONTEND REMOVED: HTMLResponse, FileResponse, StaticFiles no longer needed
+# Frontend UI is handled by Edify team independently
 from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
 import time
@@ -120,42 +121,30 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS Middleware
-# For development, allow all origins. For production, use specific origins.
-# Note: When allow_origins=["*"], allow_credentials must be False
-# Always allow all origins in development (check DEBUG env var or default to permissive for local dev)
-# Force development mode if running on localhost/127.0.0.1
+# CORS Middleware - Configured for Edify frontend integration
+# CORS ENABLED: Edify frontend integration
 is_localhost = os.getenv("HOST", "127.0.0.1") in ("127.0.0.1", "localhost", "0.0.0.0")
-# Check if running on Vercel (production)
 is_vercel = os.getenv("VERCEL") == "1" or "vercel.app" in os.getenv("VERCEL_URL", "")
 debug_mode = (settings.DEBUG or os.getenv("DEBUG", "True").lower() in ("true", "1", "yes") or is_localhost) and not is_vercel
 
-# In development mode or on Vercel, allow all origins for easier frontend-backend communication
-# On Vercel, frontend and backend are same-origin, but allow all for flexibility
-if debug_mode or is_vercel:
-    # In development or Vercel, always allow all origins for maximum compatibility
-    # Use wildcard "*" which works best with Vite proxy and Vercel deployments
+# Edify frontend domains
+EDIFY_FRONTEND_ORIGINS = [
+    "https://edify.com",
+    "https://www.edify.com",
+    "https://app.edify.com",  # If Edify uses app subdomain
+    "http://localhost:3000",  # Local development
+    "http://localhost:5173",  # Vite dev server
+    "http://localhost:8080",  # Common dev port
+]
+
+if debug_mode or is_localhost:
+    # Development: Allow all origins for local testing
     cors_origins = ["*"]
     cors_allow_credentials = False
 else:
-    # In production (non-Vercel), use settings but ensure common frontend ports are included
-    cors_origins = settings.cors_origins_list.copy() if settings.cors_origins_list else []
-    # Always include common frontend ports for compatibility
-    common_origins = [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:5176",
-        "http://127.0.0.1:5176",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:8080",
-        "http://127.0.0.1:8080",
-        "file://",  # Allow file:// protocol for direct HTML file access
-    ]
-    for origin in common_origins:
-        if origin not in cors_origins:
-            cors_origins.append(origin)
-    cors_allow_credentials = True if cors_origins else False
+    # Production: Only allow Edify domains
+    cors_origins = EDIFY_FRONTEND_ORIGINS
+    cors_allow_credentials = True
 
 app.add_middleware(
     CORSMiddleware,
@@ -302,93 +291,33 @@ async def health_check():
         )
 
 
-# Setup static files serving for frontend
-# Get the project root directory (parent of 'app' folder)
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-FRONTEND_DIR = PROJECT_ROOT / "frontend"
+# FRONTEND REMOVED: Static file serving disabled (Edify handles UI)
+# Frontend files are no longer served by this backend API service.
+# The Edify frontend team will handle all UI/UX independently.
 
-# Mount static files from frontend directory
-if FRONTEND_DIR.exists():
-    try:
-        app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
-    except Exception as e:
-        logger.warning(f"Could not mount frontend directory: {str(e)}")
-else:
-    logger.warning(f"Frontend directory does not exist: {FRONTEND_DIR}")
-
-# Root endpoint - Serve frontend HTML page
-@app.get("/", tags=["Root"], response_class=HTMLResponse)
+# Root endpoint - API information (Frontend handled by Edify)
+@app.get("/", tags=["Root"])
 async def root():
-    """Root endpoint - Returns frontend assessment page"""
-    try:
-        html_file = FRONTEND_DIR / "index.html"
-        if html_file.exists():
-            return FileResponse(html_file)
-        else:
-            logger.warning(f"Frontend index.html not found: {html_file}")
-            # Fallback to JSON if HTML file doesn't exist
-            return JSONResponse({
-                "message": "Welcome to Skill Assessment Platform",
-                "version": settings.VERSION,
-                "docs": "/docs",
-                "health": "/health",
-                "note": "Frontend index.html not found. Please ensure frontend/index.html exists."
-            })
-    except Exception as e:
-        logger.error(f"Error serving frontend: {str(e)}", exc_info=True)
-        # Fallback to JSON on error
-        return JSONResponse({
-            "message": "Welcome to Skill Assessment Platform",
-            "version": settings.VERSION,
-            "docs": "/docs",
-            "health": "/health",
-            "error": str(e) if settings.DEBUG else "Frontend error"
-        })
+    """Root endpoint - API information"""
+    return JSONResponse({
+        "message": "Skill Assessment Platform API",
+        "version": settings.VERSION,
+        "docs": "/docs",
+        "health": "/health",
+        "api_prefix": "/api",
+        "auth_prefix": "/auth",
+        "note": "This is an API-only backend service. Frontend UI is handled by Edify."
+    })
 
 
-# Assessment page endpoint
-@app.get("/static/assessment.html", tags=["Frontend"], response_class=HTMLResponse)
-async def assessment_page():
-    """Serve assessment page"""
-    try:
-        html_file = FRONTEND_DIR / "assessment.html"
-        if html_file.exists():
-            return FileResponse(html_file)
-        else:
-            return JSONResponse({"error": "Assessment page not found"}, status_code=404)
-    except Exception as e:
-        logger.error(f"Error serving assessment page: {str(e)}", exc_info=True)
-        return JSONResponse({"error": "Failed to load assessment page"}, status_code=500)
-
-
-# Results page endpoint
-@app.get("/static/results.html", tags=["Frontend"], response_class=HTMLResponse)
-async def results_page():
-    """Serve results page"""
-    try:
-        html_file = FRONTEND_DIR / "results.html"
-        if html_file.exists():
-            return FileResponse(html_file)
-        else:
-            return JSONResponse({"error": "Results page not found"}, status_code=404)
-    except Exception as e:
-        logger.error(f"Error serving results page: {str(e)}", exc_info=True)
-        return JSONResponse({"error": "Failed to load results page"}, status_code=500)
-
-
-# Assessments page endpoint (course-specific assessments)
-@app.get("/static/assessments.html", tags=["Frontend"], response_class=HTMLResponse)
-async def assessments_page():
-    """Serve assessments page for a specific course"""
-    try:
-        html_file = FRONTEND_DIR / "assessments.html"
-        if html_file.exists():
-            return FileResponse(html_file)
-        else:
-            return JSONResponse({"error": "Assessments page not found"}, status_code=404)
-    except Exception as e:
-        logger.error(f"Error serving assessments page: {str(e)}", exc_info=True)
-        return JSONResponse({"error": "Failed to load assessments page"}, status_code=500)
+# FRONTEND REMOVED: HTML page endpoints disabled (Edify handles UI)
+# The following endpoints previously served HTML pages but are now removed:
+# - /static/assessment.html
+# - /static/results.html  
+# - /static/assessments.html
+# 
+# Edify frontend will handle all page routing and UI rendering.
+# Backend APIs remain fully functional at /api/* and /auth/* endpoints.
 
 
 # Include routers

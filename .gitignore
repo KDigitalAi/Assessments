@@ -57,9 +57,9 @@ yarn-error.log*
 .npm
 .eslintcache
 
-# Frontend build
-frontend-react/dist/
-frontend-react/build/
+# Frontend (removed - API-only backend)
+frontend/
+frontend-react/
 *.log
 
 # Testing

@@ -1,5 +1,6 @@
 """
-Unified Dashboard API endpoints for Skill Assessment frontend
+Unified Dashboard API endpoints for Skill Assessment
+API-only backend service - Frontend handled by Edify team
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
