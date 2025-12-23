@@ -4,7 +4,7 @@ FastAPI main application entry point with improved security and error handling
 
 from fastapi import FastAPI, Request, status, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
@@ -345,6 +345,12 @@ async def root():
             "error": str(e) if settings.DEBUG else "Frontend error"
         })
 
+
+# Favicon endpoint - prevent 404 errors in logs
+@app.get("/favicon.ico", tags=["Root"])
+async def favicon():
+    """Favicon endpoint - returns 204 No Content to prevent 404 errors"""
+    return Response(status_code=204)
 
 # Assessment page endpoint
 @app.get("/static/assessment.html", tags=["Frontend"], response_class=HTMLResponse)
