@@ -1,371 +1,535 @@
-# Skill Assessment Builder with RAG System
+# Skill Assessment Builder - AI-Powered Learning Platform
 
-An AI-powered platform for creating skill assessments and generating questions from Vimeo videos and PDF documents using **RAG (Retrieval-Augmented Generation)** with **FastAPI**, **Supabase**, and **OpenAI**.
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.104.1-green.svg)](https://fastapi.tiangolo.com/)
+[![Supabase](https://img.shields.io/badge/Supabase-2.22+-orange.svg)](https://supabase.com/)
+[![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4-purple.svg)](https://openai.com/)
 
-## 🚀 Features
+> Production-ready platform for creating, delivering, and evaluating skill assessments using OpenAI GPT-4 and vector embeddings.
 
-### Core Assessment Features
-- **AI-Powered Question Generation**: Automatically generate MCQ and descriptive questions using LangChain and OpenAI
-- **Automated Scoring**: Deterministic scoring for MCQ questions and LLM-based rubric scoring for descriptive answers
-- **PDF Report Generation**: Generate comprehensive PDF reports with scores, feedback, and analytics
-- **Supabase Integration**: Full integration with Supabase for authentication, database, and file storage
+---
 
-### RAG System Features (NEW)
-- **Vimeo Video Processing**: Extract transcripts from Vimeo videos and generate embeddings
-- **PDF Document Processing**: Upload PDFs, extract text, chunk, and generate embeddings
-- **Unified Search**: Search across both videos and PDFs using vector similarity
-- **Context-Aware Question Generation**: Generate questions from retrieved video/PDF content
-- **Interactive Chat**: Ask questions about your videos and PDFs with AI-powered responses
+## Overview
 
-## 📋 Prerequisites
+**Skill Assessment Builder** is a **PDF-based AI Assessment Platform** that automates the complete assessment lifecycle. This is a **self-contained system** using a **separate Supabase database** dedicated exclusively to assessments.
+
+### Complete Pipeline
+
+**PDF → Embeddings → Questions → Assessments → Courses → Attempts → Results**
+
+The system:
+- Uploads PDF documents via web interface
+- Extracts text and generates vector embeddings
+- Uses RAG (Retrieval-Augmented Generation) to generate contextual MCQ questions
+- Creates assessments organized by courses
+- Delivers assessments through a web interface
+- Automatically scores responses and provides AI-generated feedback
+
+### Key Features
+
+- 📄 **PDF-Only System**: Upload and process PDF documents exclusively (no video, no chatbot)
+- 🔄 **End-to-End Pipeline**: Complete workflow from PDF upload to assessment results
+- 🤖 **AI-Powered Question Generation**: Automatically generates MCQ questions from PDF content using OpenAI GPT-4
+- 🔍 **RAG-Powered**: Uses vector embeddings for context-aware question generation
+- 📚 **Course-Based Organization**: Organizes assessments by courses with automatic course detection
+- 🎯 **Automated Scoring**: Instant scoring for MCQ questions
+- 💬 **Personalized Feedback**: AI-generated feedback based on performance
+- 🔐 **JWT Authentication**: Secure authentication via Supabase Auth
+- 📊 **Progress Tracking**: Monitor user progress across courses and assessments
+- 🗄️ **Self-Contained Database**: Separate Supabase project dedicated to assessments
+
+---
+
+## System Architecture
+
+The system consists of:
+
+1. **FastAPI Backend**: RESTful API server handling all HTTP requests and serving static frontend files
+2. **Supabase Database**: PostgreSQL with pgvector extension for storing assessments, questions, attempts, and embeddings
+3. **Supabase Auth**: JWT-based authentication and user management
+4. **OpenAI API**: Direct integration for question generation, embeddings, and feedback
+5. **Frontend Application**: HTML/JavaScript client served as static files by FastAPI
+6. **Service Layer**: Python services for assessment generation, RAG search, feedback generation, and database operations
+
+### Complete Data Flow
+
+**Phase 1: PDF Upload & Processing**
+1. User uploads PDF via web interface
+2. File stored in Supabase Storage (bucket: `pdfs`)
+3. PDF metadata recorded in `pdf_documents` table
+4. Processing status tracked in `pdf_processing_log`
+
+**Phase 2: Text Extraction & Embedding**
+1. Extract text page-by-page from PDF
+2. Chunk text into 500-1000 character segments
+3. Generate embeddings using OpenAI `text-embedding-3-small`
+4. Store chunks and embeddings in `pdf_embeddings` table
+
+**Phase 3: Question Generation (RAG)**
+1. Perform vector similarity search on `pdf_embeddings`
+2. Retrieve relevant context chunks
+3. Generate MCQ questions using OpenAI GPT-4
+4. Store questions in `skill_assessment_questions` table
+
+**Phase 4: Assessment Creation**
+1. Group questions by topic/skill domain
+2. Create assessment record in `assessments` table
+3. Link to course via `course_id` in `courses` table
+
+**Phase 5: User Assessment**
+1. User authenticates via Supabase Auth (JWT token)
+2. Views courses and assessments via frontend
+3. Starts assessment → creates `attempts` record
+4. Answers questions → stored in `responses` table
+5. System scores answers automatically
+6. Generate AI feedback → stored in `results` table
+
+For detailed architecture documentation, see [ARCHITECTURE.tex](ARCHITECTURE.tex).
+
+---
+
+## Technology Stack
+
+### Backend
+- **Python 3.10+**: Core programming language
+- **FastAPI 0.104.1**: Modern async web framework
+- **Uvicorn**: ASGI server
+- **Pydantic 2.6+**: Data validation and settings
+- **Python-dotenv**: Environment management
+
+### Database & Authentication
+- **Supabase**: Backend-as-a-Service (PostgreSQL)
+- **pgvector**: Vector extension for embeddings
+- **Supabase Auth**: JWT-based authentication
+- **Row Level Security (RLS)**: Database-level access control
+
+### AI Services
+- **OpenAI GPT-4o-mini**: LLM for question generation
+- **OpenAI text-embedding-3-small**: Embedding model for RAG search
+
+### Frontend
+- **HTML5/CSS3**: Structure and styling
+- **JavaScript (ES6+)**: Client-side logic
+- **Fetch API**: HTTP communication
+
+---
+
+## Installation
+
+### Prerequisites
 
 - **Python 3.10+** (Python 3.12 recommended)
-- **Supabase Account** with a project
-- **OpenAI API Key**
-- **Vimeo API Token** (optional, only for private videos)
+- **Supabase Account** with a **NEW project** (separate from chatbot/RAG database)
+- **OpenAI API Key** (for question generation and embeddings)
+- **Git** (for cloning repository)
+- **PyPDF2** (for PDF text extraction): `pip install PyPDF2`
 
-## 🛠️ Installation
+### Step 1: Clone Repository
 
-### 1. Clone and Setup
+```bash
+git clone <repository-url>
+cd Assessments
+```
 
-   ```bash
-   git clone <repository-url>
-   cd Skill_Assessment
-   ```
+### Step 2: Create Virtual Environment
 
-### 2. Backend Setup
-
-   ```bash
-# Create virtual environment
-   python -m venv venv
-
-# Activate virtual environment
-# Windows PowerShell:
+**Windows (PowerShell):**
+```powershell
+python -m venv venv
 venv\Scripts\Activate.ps1
-# Linux/Mac:
+```
+
+**Linux/Mac:**
+```bash
+python -m venv venv
 source venv/bin/activate
+```
 
-# Install dependencies
-   pip install -r requirements.txt
-   ```
+### Step 3: Install Dependencies
 
-### 3. Configure Environment Variables
+```bash
+pip install -r requirements.txt
+```
+
+### Step 4: Configure Environment Variables
 
 Create a `.env` file in the root directory:
 
-   ```bash
-# Copy from example
-   cp .env.example .env
-```
-
-Edit `.env` with your credentials:
-
 ```env
-# Supabase (from https://app.supabase.com/project/YOUR_PROJECT/settings/api)
+# Supabase Configuration (Required)
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your-supabase-anon-key
-SUPABASE_SERVICE_KEY=your-supabase-service-key
+SUPABASE_SERVICE_KEY=your-supabase-service-role-key
 
-# OpenAI (from https://platform.openai.com/api-keys)
+# OpenAI Configuration (Required)
 OPENAI_API_KEY=your-openai-api-key
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 
-# Optional: Vimeo (only for private videos)
-VIMEO_ACCESS_TOKEN=your-vimeo-access-token
-
 # Application Settings
 DEBUG=True
+CORS_ORIGINS=http://localhost:3000,http://localhost:5173
 ```
 
-### 4. Database Setup
+**Where to get credentials:**
+- **Supabase**: https://app.supabase.com/project/YOUR_PROJECT/settings/api
+- **OpenAI**: https://platform.openai.com/api-keys
 
-1. **Run SQL Schema in Supabase**:
-   - Go to Supabase Dashboard → SQL Editor
-   - Run `app/models/unified_schema.sql` to create all tables and functions
+---
 
-2. **Enable Extensions**:
-   - The schema automatically enables `uuid-ossp` and `vector` extensions
+## Supabase Setup
 
-3. **Create Storage Bucket**:
-   - Go to Supabase Dashboard → Storage
-   - Create a bucket named `documents` for PDF storage
+### Step 1: Create NEW Supabase Project
 
-## 🏃 Running the Application
+**CRITICAL**: Create a **separate Supabase project** for this assessment system.
 
-### Quick Start
+1. Go to https://app.supabase.com
+2. Click **"New Project"**
+3. Name it: `assessment-platform` (or your preferred name)
+4. Wait for database initialization
+5. **Do NOT reuse your existing chatbot/RAG database**
 
-**Windows PowerShell:**
+### Step 2: Run Database Schema
+
+1. Go to **SQL Editor** in Supabase Dashboard
+2. Open `app/models/assessment_schema.sql`
+3. Copy and paste the entire SQL script
+4. Click **Run** to execute
+
+This creates exactly **10 tables**:
+- **7 Core Assessment Tables**: profiles, courses, assessments, skill_assessment_questions, attempts, responses, results
+- **3 PDF/RAG Tables**: pdf_documents, pdf_embeddings, pdf_processing_log
+
+Also creates:
+- Vector similarity search function: `match_pdf_embeddings()`
+- Indexes for performance
+- Foreign key constraints
+- Auto-update triggers
+
+### Step 3: Create Storage Bucket
+
+1. Go to **Storage** in Supabase Dashboard
+2. Click **"New bucket"**
+3. Name: `pdfs`
+4. Set to **Public** (or configure RLS policies)
+5. This bucket stores uploaded PDF files
+
+### Step 4: Configure Row Level Security (RLS)
+
+Ensure RLS policies are configured:
+- Anonymous users can read published assessments
+- Authenticated users can create attempts and responses
+- Users can only access their own attempts and results
+- Service role key bypasses RLS for admin operations (PDF processing, assessment creation)
+
+### Step 5: Verify Setup
+
+Run this query in SQL Editor to verify all tables exist:
+
+```sql
+SELECT table_name 
+FROM information_schema.tables 
+WHERE table_schema = 'public' 
+    AND table_name IN (
+        'profiles', 'courses', 'assessments',
+        'skill_assessment_questions', 'attempts', 'responses', 'results',
+        'pdf_documents', 'pdf_embeddings', 'pdf_processing_log'
+    )
+ORDER BY table_name;
+```
+
+Should return exactly **10 rows**.
+
+---
+
+## Running the Application
+
+### Local Development
+
+**Windows (PowerShell):**
 ```powershell
-# Start Backend
 .\start_backend.ps1
 ```
 
 **Linux/Mac:**
 ```bash
-# Start Backend
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
+### API Endpoints
+
+**PDF Upload & Processing:**
+- `POST /api/pdf/upload` - Upload PDF file
+- `GET /api/pdf/list` - List all uploaded PDFs
+- `GET /api/pdf/{pdf_id}/status` - Get PDF processing status
+
+**Assessment Generation:**
+- `POST /api/generateAssessments` - Generate assessments from PDFs
+- `POST /api/embeddings/sync` - Sync embeddings and generate assessments
+
+**Assessment Taking:**
+- `GET /api/getAssessments` - Get all assessments
+- `POST /api/startAssessment` - Start an assessment attempt
+- `POST /api/submitResponse` - Submit answer
+- `POST /api/submitAssessment` - Complete assessment
+
 ### Access Points
 
-- **Frontend**: Open `frontend/index.html` in your browser (or serve via local server)
-- **Backend API**: http://127.0.0.1:8000
-- **API Documentation**: http://127.0.0.1:8000/docs
-- **ReDoc**: http://127.0.0.1:8000/redoc
+- **Frontend Dashboard**: http://127.0.0.1:8000/
+- **API Documentation (Swagger)**: http://127.0.0.1:8000/docs
 - **Health Check**: http://127.0.0.1:8000/health
 
-### Frontend Setup (Optional)
+---
 
-To serve the frontend with a local server:
+## Usage
 
+### Generate Assessments from PDFs
+
+**Using the API:**
 ```bash
-# Python 3
-cd frontend
-python -m http.server 8080
-
-# Or Node.js (if installed)
-npx http-server frontend -p 8080
+curl -X POST http://127.0.0.1:8000/api/generateAssessments
 ```
 
-Then visit: http://localhost:8080
-
-## 🧪 Testing Connection
-
-### Backend Test
+**Using the Script:**
 ```bash
-python tests/test_connection.py
+python scripts/generate_all_assessments.py
 ```
 
-## 📁 Project Structure
+This process:
+1. Reads all PDF embeddings from the database
+2. Generates 10 MCQ questions per source using OpenAI
+3. Creates assessment records linked to courses
+4. Stores questions in the database
 
-```
-Skill_Assessment/
-│
-├── app/                          # Backend application
-│   ├── main.py                   # FastAPI entry point
-│   ├── config.py                 # Configuration
-│   │
-│   ├── models/                   # Database models
-│   │   ├── database.py           # Pydantic models
-│   │   ├── schemas.py            # Request/Response schemas
-│   │   └── unified_schema.sql    # Database schema (run this in Supabase)
-│   │
-│   ├── routes/                   # API routes
-│   │   ├── auth.py               # Authentication
-│   │   ├── assessments.py        # Assessment management
-│   │   ├── questions.py          # Question generation
-│   │   ├── attempts.py           # Attempt management
-│   │   ├── reports.py            # PDF reports
-│   │   ├── analytics.py          # Analytics
-│   │   └── rag.py                # RAG endpoints (NEW)
-│   │
-│   ├── services/                 # Business logic
-│   │   ├── supabase_service.py   # Supabase integration
-│   │   ├── langchain_service.py  # LangChain/OpenAI
-│   │   ├── scoring_service.py    # Scoring logic
-│   │   ├── pdf_service.py        # PDF generation
-│   │   ├── video_service.py      # Vimeo video processing (NEW)
-│   │   ├── document_service.py   # PDF processing (NEW)
-│   │   ├── embedding_service.py  # Embedding generation (NEW)
-│   │   └── rag_service.py        # RAG pipeline (NEW)
-│   │
-│   ├── agents/                   # AI Agents
-│   │   ├── question_agent.py     # Question generation agent
-│   │   ├── scoring_agent.py      # Scoring agent
-│   │   ├── analytics_agent.py    # Analytics agent
-│   │   └── remediation_agent.py # Remediation agent
-│   │
-│   ├── tools/                    # LangChain tools
-│   │   ├── db_tools.py           # Database tools
-│   │   ├── feedback_tools.py     # Feedback tools
-│   │   ├── pdf_tools.py           # PDF tools
-│   │   └── similarity_tools.py   # Similarity search tools
-│   │
-│   └── utils/                    # Utilities
-│       ├── auth.py               # Authentication
-│       ├── logger.py              # Logging
-│       ├── error_handler.py      # Error handling
-│       ├── cache.py               # Caching
-│       └── rate_limit.py          # Rate limiting
-│
-├── tests/                        # Tests
-│   └── test_connection.py        # Connection tests
-│
-├── .env.example                  # Environment variables template
-├── .gitignore                    # Git ignore rules
-├── requirements.txt              # Python dependencies
-├── start_backend.ps1             # Backend startup script (Windows)
-└── README.md                     # This file
+### User Registration and Login
+
+**Register:**
+```bash
+curl -X POST http://127.0.0.1:8000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "user@example.com", "password": "password123", "name": "User Name"}'
 ```
 
-## 🔑 API Endpoints
+**Login:**
+```bash
+curl -X POST http://127.0.0.1:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "user@example.com", "password": "password123"}'
+```
 
-### Dashboard APIs (New - Unified)
-- `GET /api/getAssessments` - Get available assessments with user progress
-- `POST /api/startAssessment` - Start assessment and generate questions from existing embeddings
-- `POST /api/submitAssessment` - Submit answers and get score
-- `GET /api/getProgress` - Get user progress, stats, and recent assessments
+Returns JWT token to use in subsequent requests.
+
+### Take an Assessment
+
+1. Navigate to http://127.0.0.1:8000/
+2. Register/Login if required
+3. Select a course
+4. Click "START ASSESSMENT" on an assessment
+5. Answer questions
+6. Submit to see results and feedback
+
+---
+
+## API Endpoints
 
 ### Authentication
-- `POST /api/v1/auth/login` - Login user
-- `POST /api/v1/auth/register` - Register new user
 
-### Assessments (Legacy - for compatibility)
-- `POST /api/v1/assessments/create` - Create assessment
-- `GET /api/v1/assessments/{id}` - Get assessment
-- `GET /api/v1/assessments/` - List assessments
+- `POST /auth/login` - User login (returns JWT token)
+- `POST /auth/register` - User registration
+- `GET /auth/me` - Get current user info (requires authentication)
 
-### Questions
-- `POST /api/v1/questions/generate` - Generate questions
-- `GET /api/v1/questions/assessment/{id}` - Get assessment questions
+### Dashboard
 
-### RAG System (NEW)
-- `POST /api/v1/rag/videos/process` - Process Vimeo video
-- `POST /api/v1/rag/documents/upload` - Upload PDF document
-- `GET /api/v1/rag/documents` - List user's PDF documents
-- `DELETE /api/v1/rag/documents/{id}` - Delete PDF document
-- `POST /api/v1/rag/questions/generate` - Generate questions from content
-- `POST /api/v1/rag/chat` - Chat with documents/videos
-- `GET /api/v1/rag/chat/history` - Get chat history
+- `GET /api/getAssessments` - Get all courses with assessments
+- `GET /api/assessments/by_course/{course_id}` - Get assessments for a course
+- `GET /api/assessments/{assessment_id}/questions` - Get questions and create attempt
+- `POST /api/submitAssessment` - Submit answers and get results
+- `GET /api/attempts/{attempt_id}/result` - Get detailed results
+- `GET /api/getProgress` - Get user progress statistics
 
-### Attempts & Reports
-- `POST /api/v1/attempts/start` - Start assessment attempt
-- `POST /api/v1/attempts/submit-answer` - Submit answer
-- `POST /api/v1/reports/generate` - Generate PDF report
+### Assessment Generation
 
-## 📖 Usage Guide
+- `POST /api/generateAssessments` - Generate assessments from embeddings
+- `GET /api/assessments/stats` - Get assessment statistics
+- `POST /api/embeddings/sync` - Sync embeddings (alias for generateAssessments)
 
-### 1. Process a Vimeo Video
+### System
 
-Use the API endpoint `POST /api/v1/rag/videos/process`:
-- Send Vimeo video URL (e.g., `https://vimeo.com/123456789`)
-- Optionally provide Vimeo API access token (for private videos)
-- Wait for processing to complete
+- `GET /health` - Health check with system status
+- `GET /docs` - Interactive API documentation (Swagger UI)
 
-### 2. Upload a PDF Document
+For interactive API documentation, visit http://127.0.0.1:8000/docs
 
-Use the API endpoint `POST /api/v1/rag/documents/upload`:
-- Upload PDF file via multipart/form-data
-- Wait for processing to complete
+---
 
-### 3. Generate Questions
+## Project Structure
 
-Use the API endpoint `POST /api/v1/rag/questions/generate`:
-- Select source type (Video, PDF, or All)
-- Questions will be returned with options and explanations
-
-### 4. Chat with Content
-
-Use the API endpoint `POST /api/v1/rag/chat`:
-- Select source type (All Sources, Videos Only, or PDFs Only)
-- Send your question
-- Get AI-generated answers based on your content
-
-## 🗄️ Database Schema
-
-The unified schema includes:
-
-### Existing Tables
-- `profiles` - User profiles
-- `assessments` - Assessment configurations
-- `questions` - Generated questions
-- `attempts` - Assessment attempts
-- `responses` - User responses
-- `results` - Aggregated results
-- `embeddings` - Question embeddings (for deduplication)
-
-### New RAG Tables
-- `video_embeddings` - Video transcript chunks with embeddings
-- `pdf_embeddings` - PDF document chunks with embeddings
-- `pdf_documents` - PDF document metadata
-- `user_queries` - User query history
-- `chat_history` - Chat conversation history
-
-### Supabase Functions
-- `match_video_embeddings()` - Search video chunks
-- `match_documents()` - Search PDF chunks
-- `match_unified_embeddings()` - Unified search (main RAG function)
-- `get_pdf_documents()` - List user PDFs
-- `delete_pdf_document()` - Soft delete PDF
-
-## 🔐 Authentication
-
-The API uses Supabase JWT authentication. Include the token in requests:
-
-```javascript
-Authorization: Bearer <your-supabase-jwt-token>
+```
+Assessments/
+├── app/                          # Backend application
+│   ├── main.py                   # FastAPI entry point
+│   ├── config.py                 # Configuration & settings
+│   ├── models/                   # Database models & schemas
+│   │   ├── schemas.py            # Pydantic schemas
+│   │   └── assessment_schema.sql    # Database schema (PDF-only)
+│   ├── routes/                   # API route handlers
+│   │   ├── dashboard.py          # Main dashboard endpoints
+│   │   ├── assessments.py        # Assessment generation endpoints
+│   │   └── auth.py               # Authentication endpoints
+│   ├── services/                 # Business logic services
+│   │   ├── assessment_generator.py
+│   │   ├── topic_question_service.py
+│   │   ├── rag_service.py
+│   │   ├── embedding_service.py
+│   │   ├── feedback_service.py
+│   │   ├── supabase_service.py
+│   │   └── profile_service.py
+│   └── utils/                    # Utility modules
+│       ├── logger.py
+│       ├── error_handler.py
+│       ├── auth.py               # JWT authentication
+│       ├── cache.py
+│       └── rate_limit.py
+├── frontend/                      # Frontend web application
+│   ├── index.html                # Main dashboard
+│   ├── assessments.html          # Course assessments
+│   ├── assessment.html            # Assessment taking page
+│   ├── results.html               # Results display
+│   ├── app.js                     # Main frontend logic
+│   ├── assessment.js              # Assessment logic
+│   └── styles.css                 # Styles
+├── scripts/                        # Utility scripts
+│   └── generate_all_assessments.py
+├── requirements.txt               # Python dependencies
+├── start_backend.ps1              # Windows startup script
+└── README.md                       # This file
 ```
 
-## 🐛 Troubleshooting
+---
 
-### Backend Issues
+## Database Schema
+
+### Core Tables
+
+- **profiles**: User profiles linked to Supabase Auth users
+- **courses**: Course definitions (Python, DevOps, etc.)
+- **assessments**: Assessment configurations with blueprints (JSON containing question IDs)
+- **skill_assessment_questions**: Generated MCQ questions with options, correct answers, explanations
+- **attempts**: User assessment attempts with status, scores, timestamps
+- **responses**: Individual question responses with scores
+- **results**: Aggregated assessment results with AI-generated feedback
+- **pdf_embeddings**: PDF content chunks with vector embeddings (populated externally)
+
+---
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Required | Description | Default |
+|----------|----------|-------------|---------|
+| `SUPABASE_URL` | Yes | Supabase project URL | - |
+| `SUPABASE_KEY` | Yes | Supabase anon key | - |
+| `SUPABASE_SERVICE_KEY` | Recommended | Service role key (bypasses RLS) | - |
+| `OPENAI_API_KEY` | Yes | OpenAI API key | - |
+| `OPENAI_MODEL` | No | OpenAI model | `gpt-4o-mini` |
+| `OPENAI_EMBEDDING_MODEL` | No | Embedding model | `text-embedding-3-small` |
+| `DEBUG` | No | Debug mode | `True` |
+| `CORS_ORIGINS` | No | Comma-separated CORS origins | - |
+
+---
+
+## Deployment
+
+### Production Deployment
+
+1. **Set Environment Variables** in your hosting platform:
+   - `SUPABASE_URL`, `SUPABASE_KEY`, `SUPABASE_SERVICE_KEY`
+   - `OPENAI_API_KEY`
+   - `DEBUG=False`
+   - `CORS_ORIGINS` (your production domain)
+
+2. **Deploy FastAPI Application**:
+   ```bash
+   uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+   ```
+
+3. **Frontend**: Served automatically by FastAPI (no separate deployment needed)
+
+4. **Database**: Use Supabase production instance
+
+### Deployment Platforms
+
+- **Vercel**: Serverless deployment (recommended)
+- **AWS**: EC2 or Lambda
+- **Heroku**: Platform-as-a-Service
+- **Railway**: Simple deployment
+
+### Production Considerations
+
+- Set `DEBUG=False` in production
+- Configure CORS origins for production domain
+- Use `SUPABASE_SERVICE_KEY` for admin operations
+- Enable RLS policies in Supabase
+- Configure rate limiting for production load
+- Set up monitoring and logging
+
+---
+
+## Troubleshooting
+
+### Common Issues
 
 **"Supabase client not initialized"**
 - Check `.env` file has correct `SUPABASE_URL` and `SUPABASE_KEY`
-- Ensure credentials are not placeholders
+- Verify credentials are not placeholders
+
+**"new row violates row-level security policy"**
+- Use `SUPABASE_SERVICE_KEY` for admin operations
+- Check RLS policies in Supabase Dashboard
 
 **"OpenAI API key not configured"**
 - Add `OPENAI_API_KEY` to `.env` file
-- Get API key from https://platform.openai.com/api-keys
-
-**"Module not found" errors**
-- Run `pip install -r requirements.txt`
-- Activate virtual environment
-
-### Database Issues
+- Get key from https://platform.openai.com/api-keys
 
 **"Table does not exist"**
-- Run `app/models/unified_schema.sql` in Supabase SQL Editor
-- Check Supabase connection in `.env`
+- Run `app/models/assessment_schema.sql` in Supabase SQL Editor
+- Verify all 10 tables are created successfully
 
-**"Function does not exist"**
-- Ensure SQL schema was run completely
-- Check that `vector` extension is enabled
+**"Invalid or expired token"**
+- Token may have expired (default: 1 hour)
+- Re-authenticate via `/auth/login`
+- Check Supabase Auth configuration
 
-## 🧪 Testing
+**"Assessments not showing"**
+- Check assessments have `status = 'published'`
+- Verify `course_id` is set
+- Clear browser cache
 
-### Run Connection Tests
+---
 
-```bash
-# Test backend connection
-python tests/test_connection.py
-```
-
-## 📝 Environment Variables
-
-See `.env.example` for all required variables. Key variables:
-
-- `SUPABASE_URL` - Your Supabase project URL
-- `SUPABASE_KEY` - Supabase anon key
-- `OPENAI_API_KEY` - OpenAI API key
-- `DEBUG` - Set to `True` for development
-
-## 🚀 Deployment
-
-### Backend Production
-
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
-```
-
-## 📚 Documentation
-
-- **API Documentation**: http://localhost:8000/docs (Swagger UI)
-- **ReDoc**: http://localhost:8000/redoc
-- **RAG Setup Guide**: See `RAG_SETUP.md` for detailed RAG system setup
-
-## 🤝 Contributing
+## Contributing
 
 1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
-## 📄 License
+---
 
-[Your License Here]
+## License
+
+This project is licensed under the MIT License.
+
+---
+
+## Acknowledgments
+
+- **FastAPI** - Modern web framework
+- **Supabase** - Backend-as-a-Service
+- **OpenAI** - AI question generation
+- **PostgreSQL** - Robust database
 
 ---
 

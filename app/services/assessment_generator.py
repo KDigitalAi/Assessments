@@ -1,6 +1,6 @@
 """
 Service for automatically generating assessments from existing embeddings
-Reads video_embeddings and pdf_embeddings, generates questions, and creates assessments
+Reads pdf_embeddings, generates questions, and creates assessments
 """
 
 from typing import List, Dict, Any, Optional
@@ -10,6 +10,7 @@ from app.services.supabase_service import supabase_service
 from app.services.topic_question_service import topic_question_service
 from app.utils.logger import logger
 import json
+import re
 
 
 class AssessmentGenerator:
@@ -22,45 +23,15 @@ class AssessmentGenerator:
     
     def _initialize_client(self):
         """Initialize Supabase client"""
-        self.client = supabase_service.get_client()
-    
-    def get_all_video_sources(self) -> List[Dict[str, Any]]:
-        """
-        Get all unique video sources from video_embeddings table
+        # Use service key for admin operations (creating assessments)
+        # This bypasses RLS policies
+        self.client = supabase_service.get_client(use_service_key=True)
         
-        Returns:
-            List of unique video sources with metadata
-        """
-        try:
-            if not self.client:
-                logger.error("Supabase client not available")
-                return []
-            
-            # Get distinct video IDs and titles
-            response = self.client.table("video_embeddings")\
-                .select("video_id, video_title")\
-                .execute()
-            
-            if not response.data:
-                return []
-            
-            # Get unique video sources
-            unique_videos = {}
-            for row in response.data:
-                video_id = row.get("video_id")
-                if video_id and video_id not in unique_videos:
-                    unique_videos[video_id] = {
-                        "video_id": video_id,
-                        "video_title": row.get("video_title", f"Video {video_id}"),
-                        "source_type": "video"
-                    }
-            
-            logger.info(f"Found {len(unique_videos)} unique video sources")
-            return list(unique_videos.values())
-            
-        except Exception as e:
-            logger.error(f"Error getting video sources: {str(e)}")
-            return []
+        # Fallback to anon key if service key not available
+        if not self.client:
+            logger.warning("Service key client not available, falling back to anon key")
+            logger.warning("Admin operations (creating assessments) may fail due to RLS")
+            self.client = supabase_service.get_client(use_service_key=False)
     
     def get_all_pdf_sources(self) -> List[Dict[str, Any]]:
         """
@@ -107,13 +78,12 @@ class AssessmentGenerator:
             logger.error(f"Error getting PDF sources: {str(e)}")
             return []
     
-    def get_chunks_for_source(self, source_id: str, source_type: str, limit: int = 20) -> List[Dict[str, Any]]:
+    def get_chunks_for_source(self, pdf_id: str, limit: int = 20) -> List[Dict[str, Any]]:
         """
-        Get text chunks for a specific video or PDF source
+        Get text chunks for a specific PDF source
         
         Args:
-            source_id: Video ID or document ID
-            source_type: 'video' or 'pdf'
+            pdf_id: PDF document ID
             limit: Maximum number of chunks to retrieve
         
         Returns:
@@ -123,46 +93,27 @@ class AssessmentGenerator:
             if not self.client:
                 return []
             
-            if source_type == "video":
-                # Note: Actual column name is 'content' not 'chunk_text'
-                response = self.client.table("video_embeddings")\
-                    .select("id, content, chunk_id, video_title")\
-                    .eq("video_id", source_id)\
-                    .limit(limit)\
-                    .execute()
-                
-                chunks = []
-                for row in response.data or []:
-                    chunks.append({
-                        "chunk_text": row.get("content", ""),  # Map 'content' to 'chunk_text' for compatibility
-                        "source_type": "video",
-                        "source_id": source_id,
-                        "source_name": row.get("video_title", source_id)
-                    })
-                return chunks
+            # OPTIMIZATION: Use correct column names from schema
+            # Schema uses: chunk_text, chunk_index (not content, chunk_id)
+            response = self.client.table("pdf_embeddings")\
+                .select("id, chunk_text, chunk_index, pdf_title, page_number")\
+                .eq("pdf_id", pdf_id)\
+                .order("chunk_index")\
+                .limit(limit)\
+                .execute()
             
-            elif source_type == "pdf":
-                # Note: Actual column names are 'content', 'pdf_id', 'pdf_title' (not chunk_text, document_id, document_name)
-                response = self.client.table("pdf_embeddings")\
-                    .select("id, content, chunk_id, pdf_title, page_number")\
-                    .eq("pdf_id", source_id)\
-                    .limit(limit)\
-                    .execute()
-                
-                chunks = []
-                for row in response.data or []:
-                    chunks.append({
-                        "chunk_text": row.get("content", ""),  # Map 'content' to 'chunk_text' for compatibility
-                        "source_type": "pdf",
-                        "source_id": source_id,
-                        "source_name": row.get("pdf_title", source_id)
-                    })
-                return chunks
-            
-            return []
+            chunks = []
+            for row in response.data or []:
+                chunks.append({
+                    "chunk_text": row.get("chunk_text", ""),  # Use correct column name
+                    "source_type": "pdf",
+                    "source_id": pdf_id,
+                    "source_name": row.get("pdf_title", pdf_id)
+                })
+            return chunks
             
         except Exception as e:
-            logger.error(f"Error getting chunks for source {source_id}: {str(e)}")
+            logger.error(f"Error getting chunks for PDF {pdf_id}: {str(e)}")
             return []
     
     def determine_difficulty_from_chunks(self, chunks: List[Dict[str, Any]]) -> str:
@@ -199,45 +150,137 @@ class AssessmentGenerator:
         else:
             return "medium"
     
-    def extract_topic_from_source(self, source_name: str, source_type: str) -> str:
+    def extract_topic_from_source(self, source_name: str) -> str:
         """
-        Extract topic/skill domain from source name
+        Extract topic/skill domain from PDF source name
+        
+        Cleans structural metadata (module numbers, training structure) while preserving content topic
         
         Args:
-            source_name: Video title or document name
-            source_type: 'video' or 'pdf'
+            source_name: PDF document name
         
         Returns:
-            Extracted topic/skill domain
+            Extracted topic/skill domain (cleaned of structural metadata)
         """
-        # Common skill domains
-        skill_keywords = {
-            "react": "React",
-            "javascript": "JavaScript",
-            "typescript": "TypeScript",
-            "python": "Python",
-            "java": "Java",
-            "problem": "Problem Solving",
-            "communication": "Communication",
-            "teamwork": "Teamwork",
-            "collaboration": "Communication & Collaboration"
+        if not source_name:
+            return "General PDF"
+        
+        # Clean the title
+        cleaned_title = source_name.strip()
+        
+        # Remove .pdf extension
+        cleaned_title = re.sub(r'\.pdf$', '', cleaned_title, flags=re.IGNORECASE)
+        
+        # Remove module numbers and patterns like "Module 4:", "Module IV:", etc.
+        cleaned_title = re.sub(r'\bmodule\s+\d+[:\s]*', '', cleaned_title, flags=re.IGNORECASE)
+        cleaned_title = re.sub(r'\bmodule\s+[ivx]+[:\s]*', '', cleaned_title, flags=re.IGNORECASE)
+        
+        # Remove lesson numbers
+        cleaned_title = re.sub(r'\blesson\s+\d+[:\s]*', '', cleaned_title, flags=re.IGNORECASE)
+        
+        # Remove chapter numbers
+        cleaned_title = re.sub(r'\bchapter\s+\d+[:\s]*', '', cleaned_title, flags=re.IGNORECASE)
+        
+        # Remove leading numbers and separators (e.g., "4_", "10_", "1-")
+        cleaned_title = re.sub(r'^\d+[_\-\s]+', '', cleaned_title)
+        
+        # Remove "Training", "Course", "Tutorial" prefixes if they're structural
+        cleaned_title = re.sub(r'^(training|course|tutorial)[:\s]+', '', cleaned_title, flags=re.IGNORECASE)
+        
+        # Remove common structural prefixes
+        cleaned_title = re.sub(r'^(for|on|about)\s+', '', cleaned_title, flags=re.IGNORECASE)
+        
+        # Clean up multiple spaces and trim
+        cleaned_title = re.sub(r'\s+', ' ', cleaned_title).strip()
+        
+        # If title is empty after cleaning, use a generic name
+        if not cleaned_title:
+            cleaned_title = "Content Assessment"
+        
+        return cleaned_title
+    
+    def analyze_content_for_coding_suitability(self, chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Analyze embedding chunks to determine if content supports coding questions.
+        
+        This method examines the content to detect programming-related concepts,
+        code examples, syntax, algorithms, and other coding indicators.
+        
+        Returns:
+            Dictionary with:
+            - supports_coding: bool - Whether content supports coding questions
+            - coding_score: float (0.0 to 1.0) - Confidence score for coding content
+            - coding_keywords_found: list - List of detected coding keywords
+            - recommended_coding_count: int - Recommended number of coding questions (0-16)
+        """
+        if not chunks:
+            return {
+                "supports_coding": False,
+                "coding_score": 0.0,
+                "coding_keywords_found": [],
+                "recommended_coding_count": 0
+            }
+        
+        # Keywords that indicate coding/programming content
+        coding_keywords = [
+            # Code-related terms
+            "code", "function", "method", "class", "variable", "syntax", "compile",
+            "execute", "runtime", "algorithm", "data structure", "array", "list",
+            "loop", "if", "else", "return", "import", "package", "module",
+            # Programming concepts
+            "programming", "implementation", "debug", "error", "exception",
+            "try", "catch", "finally", "public", "private", "static", "void",
+            "int", "string", "boolean", "object", "instance", "constructor",
+            # Code patterns and control flow
+            "for loop", "while loop", "switch", "case", "break", "continue",
+            "recursion", "iteration", "polymorphism", "inheritance", "encapsulation",
+            # Language-specific (Java, Python, JavaScript, etc.)
+            "java", "python", "javascript", "c++", "c#", "typescript",
+            # Code examples indicators
+            "example", "sample code", "code snippet", "program", "application"
+        ]
+        
+        # Combine all chunk text for analysis
+        all_text = " ".join([
+            chunk.get("chunk_text", "").lower() 
+            for chunk in chunks[:20]  # Analyze top 20 chunks for efficiency
+        ])
+        
+        # Count coding keywords found
+        found_keywords = []
+        keyword_count = 0
+        for keyword in coding_keywords:
+            if keyword.lower() in all_text:
+                keyword_count += 1
+                found_keywords.append(keyword)
+        
+        # Calculate coding score (0.0 to 1.0)
+        # Higher score = more suitable for coding questions
+        # Normalize based on number of unique keywords found
+        coding_score = min(keyword_count / 15.0, 1.0)
+        
+        # Determine if content supports coding questions
+        # Threshold: at least 30% coding indicators
+        supports_coding = coding_score >= 0.3
+        
+        # Recommend coding question count based on score
+        # Minimum 7 coding questions if content supports it
+        if supports_coding:
+            if coding_score >= 0.7:
+                recommended_coding_count = 10  # High coding content - more coding questions
+            elif coding_score >= 0.5:
+                recommended_coding_count = 8   # Medium coding content
+            else:
+                recommended_coding_count = 7   # Minimum coding content - still generate 7
+        else:
+            recommended_coding_count = 0  # Theory only - no coding questions
+        
+        return {
+            "supports_coding": supports_coding,
+            "coding_score": coding_score,
+            "coding_keywords_found": found_keywords[:10],  # Top 10 keywords
+            "recommended_coding_count": recommended_coding_count
         }
-        
-        source_lower = source_name.lower()
-        
-        # Try to match keywords
-        for keyword, skill in skill_keywords.items():
-            if keyword in source_lower:
-                return skill
-        
-        # Fallback: extract from title or use generic
-        if " " in source_name:
-            # Use first significant word
-            words = source_name.split()
-            if len(words) > 0:
-                return words[0].title()
-        
-        return source_name[:30] if source_name else "General"
     
     def generate_questions_from_chunks(
         self,
@@ -343,11 +386,11 @@ class AssessmentGenerator:
                     if response.data:
                         batch_ids = [q.get('id') for q in response.data]
                         inserted_ids.extend(batch_ids)
-                        logger.info(f"✅ Successfully inserted {len(batch_ids)} questions. IDs: {batch_ids[:3]}...")
+                        logger.info(f"[OK] Successfully inserted {len(batch_ids)} questions. IDs: {batch_ids[:3]}...")
                     else:
-                        logger.warning(f"⚠️  Insert response has no data for batch {i//batch_size + 1}")
+                        logger.warning(f"[WARN] Insert response has no data for batch {i//batch_size + 1}")
                 except Exception as e:
-                    logger.error(f"❌ Error inserting questions batch {i//batch_size + 1}: {str(e)}")
+                    logger.error(f"[FAILED] Error inserting questions batch {i//batch_size + 1}: {str(e)}")
                     import traceback
                     logger.error(traceback.format_exc())
             
@@ -368,86 +411,157 @@ class AssessmentGenerator:
     
     def generate_questions_for_source(
         self,
-        source_id: str,
-        source_name: str,
-        source_type: str,
-        num_questions: int = 10
+        pdf_id: str,
+        pdf_name: str,
+        num_questions: int = 16  # Default to 16 questions as per requirement
     ) -> Dict[str, Any]:
         """
-        Generate questions for a specific video or PDF source
+        Generate questions for a specific PDF source.
+        
+        This method generates 16 total questions with at least 7 coding questions
+        when content supports it. The distribution is dynamic based on content analysis.
         
         Args:
-            source_id: Video ID or document ID
-            source_name: Video title or document name
-            source_type: 'video' or 'pdf'
-            num_questions: Number of questions to generate (default 10)
+            pdf_id: PDF document ID
+            pdf_name: PDF document name
+            num_questions: Number of questions to generate (default 16)
         
         Returns:
             Dictionary with success status and generated questions
         """
         try:
-            # Get chunks for this source
-            chunks = self.get_chunks_for_source(source_id, source_type, limit=30)
+            # Get chunks for this PDF
+            chunks = self.get_chunks_for_source(pdf_id, limit=30)
             
             if not chunks:
-                logger.warning(f"No chunks found for {source_type} {source_id}")
+                logger.warning(f"No chunks found for PDF {pdf_id}")
                 return {
                     "success": False,
-                    "error": f"No content found for {source_name}"
+                    "error": f"No content found for {pdf_name}"
                 }
             
-            # Extract topic from source name
-            topic = self.extract_topic_from_source(source_name, source_type)
+            # Extract topic from PDF name
+            topic = self.extract_topic_from_source(pdf_name)
             
             # Determine difficulty
             difficulty = self.determine_difficulty_from_chunks(chunks)
             
-            # Generate questions with mixed difficulty levels
-            # Generate 3 easy, 4 medium, 3 hard questions
-            easy_count = num_questions // 3
-            medium_count = (num_questions * 2) // 3
-            hard_count = num_questions - easy_count - medium_count
+            # STEP 1: Analyze content for coding suitability
+            content_analysis = self.analyze_content_for_coding_suitability(chunks)
+            supports_coding = content_analysis["supports_coding"]
+            recommended_coding_count = content_analysis["recommended_coding_count"]
+            
+            logger.info(f"Content analysis for {pdf_name}:")
+            logger.info(f"  - Supports coding: {supports_coding}")
+            logger.info(f"  - Coding score: {content_analysis['coding_score']:.2f}")
+            logger.info(f"  - Recommended coding questions: {recommended_coding_count}")
+            
+            # STEP 2: Determine question distribution
+            total_questions = num_questions  # Default 16
+            
+            if supports_coding:
+                # Ensure at least 7 coding questions
+                coding_count = max(7, recommended_coding_count)
+                theory_count = total_questions - coding_count
+                
+                # Ensure we have at least some theory questions (minimum 3)
+                if theory_count < 3:
+                    theory_count = 3
+                    coding_count = total_questions - theory_count
+            else:
+                # Fallback to theory-only if content doesn't support coding
+                coding_count = 0
+                theory_count = total_questions
+                logger.info(f"Content does not support coding questions. Generating {theory_count} theory questions only.")
             
             all_questions = []
             
-            # Generate easy questions
-            if easy_count > 0:
-                easy_questions = topic_question_service.generate_questions_from_embeddings(
-                    topic=topic,
-                    chunks=chunks[:10],  # Use simpler chunks
-                    num_questions=easy_count,
-                    question_type="mcq",
-                    difficulty="easy"
-                )
-                all_questions.extend(easy_questions)
+            # STEP 3: Generate theory questions (if needed)
+            if theory_count > 0:
+                # Distribute theory questions across difficulty levels
+                theory_easy = max(1, theory_count // 3)
+                theory_medium = max(1, (theory_count * 2) // 3)
+                theory_hard = theory_count - theory_easy - theory_medium
+                
+                if theory_easy > 0:
+                    theory_easy_q = topic_question_service.generate_questions_from_embeddings(
+                        topic=topic,
+                        chunks=chunks[:10],
+                        num_questions=theory_easy,
+                        question_type="theory",  # Specify theory type
+                        difficulty="easy"
+                    )
+                    all_questions.extend(theory_easy_q)
+                
+                if theory_medium > 0:
+                    theory_medium_q = topic_question_service.generate_questions_from_embeddings(
+                        topic=topic,
+                        chunks=chunks[:20],
+                        num_questions=theory_medium,
+                        question_type="theory",
+                        difficulty="medium"
+                    )
+                    all_questions.extend(theory_medium_q)
+                
+                if theory_hard > 0:
+                    theory_hard_q = topic_question_service.generate_questions_from_embeddings(
+                        topic=topic,
+                        chunks=chunks,
+                        num_questions=theory_hard,
+                        question_type="theory",
+                        difficulty="hard"
+                    )
+                    all_questions.extend(theory_hard_q)
             
-            # Generate medium questions
-            if medium_count > 0:
-                medium_questions = topic_question_service.generate_questions_from_embeddings(
-                    topic=topic,
-                    chunks=chunks[:20],  # Use more chunks
-                    num_questions=medium_count,
-                    question_type="mcq",
-                    difficulty="medium"
-                )
-                all_questions.extend(medium_questions)
-            
-            # Generate hard questions
-            if hard_count > 0:
-                hard_questions = topic_question_service.generate_questions_from_embeddings(
-                    topic=topic,
-                    chunks=chunks,  # Use all chunks
-                    num_questions=hard_count,
-                    question_type="mcq",
-                    difficulty="hard"
-                )
-                all_questions.extend(hard_questions)
+            # STEP 4: Generate coding questions (if content supports it)
+            if coding_count > 0 and supports_coding:
+                # Distribute coding questions across difficulty levels
+                coding_easy = max(1, coding_count // 3)
+                coding_medium = max(2, (coding_count * 2) // 3)
+                coding_hard = coding_count - coding_easy - coding_medium
+                
+                if coding_easy > 0:
+                    coding_easy_q = topic_question_service.generate_questions_from_embeddings(
+                        topic=topic,
+                        chunks=chunks[:10],
+                        num_questions=coding_easy,
+                        question_type="coding",  # Specify coding type
+                        difficulty="easy"
+                    )
+                    all_questions.extend(coding_easy_q)
+                
+                if coding_medium > 0:
+                    coding_medium_q = topic_question_service.generate_questions_from_embeddings(
+                        topic=topic,
+                        chunks=chunks[:20],
+                        num_questions=coding_medium,
+                        question_type="coding",
+                        difficulty="medium"
+                    )
+                    all_questions.extend(coding_medium_q)
+                
+                if coding_hard > 0:
+                    coding_hard_q = topic_question_service.generate_questions_from_embeddings(
+                        topic=topic,
+                        chunks=chunks,
+                        num_questions=coding_hard,
+                        question_type="coding",
+                        difficulty="hard"
+                    )
+                    all_questions.extend(coding_hard_q)
             
             if not all_questions:
                 return {
                     "success": False,
                     "error": "Failed to generate questions"
                 }
+            
+            # Log final distribution
+            coding_q_count = sum(1 for q in all_questions if q.get("question_type") == "coding")
+            theory_q_count = sum(1 for q in all_questions if q.get("question_type") == "theory")
+            logger.info(f"Generated {len(all_questions)} total questions:")
+            logger.info(f"  - Coding questions: {coding_q_count}")
+            logger.info(f"  - Theory questions: {theory_q_count}")
             
             # Store questions (without source_id and source_type as per user request)
             questions_to_store = []
@@ -458,7 +572,8 @@ class AssessmentGenerator:
                     "options": q.get("options", []),
                     "correct_answer": q.get("correct_answer", ""),
                     "explanation": q.get("explanation", ""),
-                    "difficulty": q.get("difficulty", "medium")
+                    "difficulty": q.get("difficulty", "medium"),
+                    "question_type": q.get("question_type", "theory")  # Store question type (theory | coding)
                     # Note: source_type and source_id are NOT stored as per user requirements
                 })
             
@@ -482,13 +597,36 @@ class AssessmentGenerator:
                     if response.data:
                         batch_ids = [q.get('id') for q in response.data]
                         inserted_ids.extend(batch_ids)
-                        logger.info(f"✅ Successfully inserted {len(batch_ids)} questions. IDs: {batch_ids[:3]}...")
+                        logger.info(f"[OK] Successfully inserted {len(batch_ids)} questions. IDs: {batch_ids[:3]}...")
                     else:
-                        logger.warning(f"⚠️  Insert response has no data for batch {i//batch_size + 1}")
+                        logger.warning(f"[WARN] Insert response has no data for batch {i//batch_size + 1}")
                 except Exception as e:
-                    logger.error(f"❌ Error inserting questions batch {i//batch_size + 1}: {str(e)}")
-                    import traceback
-                    logger.error(traceback.format_exc())
+                    error_str = str(e)
+                    # Handle case where question_type column doesn't exist in database
+                    if "question_type" in error_str.lower() and ("column" in error_str.lower() or "does not exist" in error_str.lower()):
+                        logger.warning(f"[WARN] question_type column not found, retrying without it...")
+                        # Remove question_type from batch and retry
+                        batch_without_type = []
+                        for q in batch:
+                            q_copy = q.copy()
+                            q_copy.pop("question_type", None)
+                            batch_without_type.append(q_copy)
+                        try:
+                            response = self.client.table('skill_assessment_questions').insert(batch_without_type).execute()
+                            if response.data:
+                                batch_ids = [q.get('id') for q in response.data]
+                                inserted_ids.extend(batch_ids)
+                                logger.info(f"[OK] Successfully inserted {len(batch_ids)} questions without question_type column")
+                            else:
+                                logger.warning(f"[WARN] Insert response has no data for batch {i//batch_size + 1}")
+                        except Exception as retry_error:
+                            logger.error(f"[FAILED] Error inserting questions batch {i//batch_size + 1}: {str(retry_error)}")
+                            import traceback
+                            logger.error(traceback.format_exc())
+                    else:
+                        logger.error(f"[FAILED] Error inserting questions batch {i//batch_size + 1}: {str(e)}")
+                        import traceback
+                        logger.error(traceback.format_exc())
             
             store_result = {
                 "success": len(inserted_ids) > 0,
@@ -507,15 +645,18 @@ class AssessmentGenerator:
             return {
                 "success": True,
                 "topic": topic,
-                "source_name": source_name,
-                "source_type": source_type,
+                "source_name": pdf_name,
+                "source_type": "pdf",
                 "questions": all_questions,
                 "question_ids": store_result.get("question_ids", []),
-                "difficulty": difficulty
+                "difficulty": difficulty,
+                "coding_count": coding_q_count,
+                "theory_count": theory_q_count,
+                "total_count": len(all_questions)
             }
             
         except Exception as e:
-            logger.error(f"Error generating questions for source {source_id}: {str(e)}")
+            logger.error(f"Error generating questions for PDF {pdf_id}: {str(e)}")
             return {
                 "success": False,
                 "error": str(e)
@@ -527,28 +668,41 @@ class AssessmentGenerator:
         source_name: str,
         question_ids: List[str],
         difficulty: str,
-        question_count: int
+        question_count: int,
+        course_id: Optional[str] = None,
+        assessment_title: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Create an assessment entry in the assessments table
         
         Args:
             topic: Skill domain/topic
-            source_name: Original source name (video title or document name)
+            source_name: Original PDF document name
             question_ids: List of question UUIDs
             difficulty: Average difficulty level
             question_count: Total number of questions
+            course_id: Optional course ID to link assessment
+            assessment_title: Optional custom assessment title (defaults to source_name)
         
         Returns:
             Created assessment record or None
         """
         try:
+            # Ensure we're using service key client for admin operations
+            # This bypasses RLS policies which block inserts with created_by=None
             if not self.client:
-                logger.error("Supabase client not available")
+                self.client = supabase_service.get_client(use_service_key=True)
+            
+            if not self.client:
+                logger.error("Supabase service client not available. Cannot create assessments.")
+                logger.error("SOLUTION: Add SUPABASE_SERVICE_KEY to your .env file")
                 return None
             
             # Calculate duration (1.5 minutes per question)
             duration_minutes = int(question_count * 1.5)
+            
+            # Use custom title if provided, otherwise use source_name
+            title = assessment_title or source_name
             
             # Create description
             description = f"Assessment based on {source_name}. Test your knowledge with {question_count} multiple-choice questions."
@@ -566,7 +720,7 @@ class AssessmentGenerator:
             
             # Create assessment record
             assessment_data = {
-                "title": f"{topic} Assessment",
+                "title": title,
                 "description": description,
                 "skill_domain": topic,
                 "difficulty": difficulty,
@@ -575,9 +729,13 @@ class AssessmentGenerator:
                 "passing_score": 70,
                 "status": "published",
                 "blueprint": json.dumps(blueprint),
-                "created_by": None,  # No user in no-auth mode
+                "created_by": None,  # System-generated assessment
                 "published_at": datetime.utcnow().isoformat()
             }
+            
+            # Add course_id if provided
+            if course_id:
+                assessment_data["course_id"] = course_id
             
             logger.info(f"Inserting assessment: {assessment_data.get('title')}")
             response = self.client.table("assessments").insert(assessment_data).execute()
@@ -594,15 +752,19 @@ class AssessmentGenerator:
             
         except Exception as e:
             logger.error(f"Error creating assessment: {str(e)}")
+            # Provide helpful error message
+            if "row-level security" in str(e).lower():
+                logger.error("SOLUTION: Ensure SUPABASE_SERVICE_KEY is set in .env file")
+                logger.error("The service key bypasses RLS policies for admin operations")
             return None
     
     def generate_all_assessments(self) -> Dict[str, Any]:
         """
-        Generate assessments from all existing embeddings
+        Generate assessments from all existing PDF embeddings
         
         This function:
-        1. Reads all video and PDF sources
-        2. Generates questions for each source
+        1. Reads all PDF sources
+        2. Generates questions for each PDF
         3. Creates assessment entries
         4. Stores everything in Supabase
         
@@ -610,48 +772,43 @@ class AssessmentGenerator:
             Dictionary with generation results
         """
         try:
-            logger.info("Starting assessment generation from existing embeddings")
+            logger.info("Starting assessment generation from existing PDF embeddings")
             
-            # Get all sources
-            video_sources = self.get_all_video_sources()
+            # Get all PDF sources
             pdf_sources = self.get_all_pdf_sources()
             
-            all_sources = video_sources + pdf_sources
-            
-            if not all_sources:
-                logger.warning("No video or PDF sources found in database")
+            if not pdf_sources:
+                logger.warning("No PDF sources found in database")
                 return {
                     "success": False,
-                    "error": "No sources found in database",
+                    "error": "No PDF sources found in database",
                     "generated": 0
                 }
             
-            logger.info(f"Found {len(all_sources)} total sources ({len(video_sources)} videos, {len(pdf_sources)} PDFs)")
+            logger.info(f"Found {len(pdf_sources)} PDF sources")
             
             generated_assessments = []
             failed_sources = []
             
-            # Process each source
-            for source in all_sources:
+            # Process each PDF source
+            for source in pdf_sources:
                 # Handle both old and new column names
-                source_id = source.get("video_id") or source.get("document_id") or source.get("pdf_id")
-                source_name = source.get("video_title") or source.get("document_name") or source.get("pdf_title", "Unknown")
-                source_type = source.get("source_type", "unknown")
+                pdf_id = source.get("document_id") or source.get("pdf_id")
+                pdf_name = source.get("document_name") or source.get("pdf_title", "Unknown")
                 
-                logger.info(f"Processing {source_type}: {source_name} (ID: {source_id})")
+                logger.info(f"Processing PDF: {pdf_name} (ID: {pdf_id})")
                 
                 # Generate questions
                 result = self.generate_questions_for_source(
-                    source_id=source_id,
-                    source_name=source_name,
-                    source_type=source_type,
+                    pdf_id=pdf_id,
+                    pdf_name=pdf_name,
                     num_questions=10
                 )
                 
                 if not result.get("success"):
-                    logger.warning(f"Failed to generate questions for {source_name}: {result.get('error')}")
+                    logger.warning(f"Failed to generate questions for {pdf_name}: {result.get('error')}")
                     failed_sources.append({
-                        "source": source_name,
+                        "source": pdf_name,
                         "error": result.get("error")
                     })
                     continue
@@ -662,9 +819,9 @@ class AssessmentGenerator:
                 question_count = len(result.get("questions", []))
                 
                 if not question_ids or question_count == 0:
-                    logger.warning(f"No questions stored for {source_name}")
+                    logger.warning(f"No questions stored for {pdf_name}")
                     failed_sources.append({
-                        "source": source_name,
+                        "source": pdf_name,
                         "error": "Questions generated but not stored"
                     })
                     continue
@@ -672,7 +829,7 @@ class AssessmentGenerator:
                 # Create assessment
                 assessment = self.create_assessment_from_questions(
                     topic=topic,
-                    source_name=source_name,
+                    source_name=pdf_name,
                     question_ids=question_ids,
                     difficulty=difficulty,
                     question_count=question_count
@@ -683,20 +840,20 @@ class AssessmentGenerator:
                         "assessment_id": assessment.get("id"),
                         "title": assessment.get("title"),
                         "topic": topic,
-                        "source": source_name,
+                        "source": pdf_name,
                         "question_count": question_count
                     })
-                    logger.info(f"✅ Created assessment: {assessment.get('title')}")
+                    logger.info(f"[OK] Created assessment: {assessment.get('title')}")
                 else:
-                    logger.warning(f"Failed to create assessment for {source_name}")
+                    logger.warning(f"Failed to create assessment for {pdf_name}")
                     failed_sources.append({
-                        "source": source_name,
+                        "source": pdf_name,
                         "error": "Assessment creation failed"
                     })
             
             return {
                 "success": True,
-                "total_sources": len(all_sources),
+                "total_sources": len(pdf_sources),
                 "generated": len(generated_assessments),
                 "failed": len(failed_sources),
                 "assessments": generated_assessments,

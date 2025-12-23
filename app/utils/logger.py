@@ -53,7 +53,7 @@ def setup_logger(name: str = __name__, level: Optional[int] = None) -> logging.L
     logger = logging.getLogger(name)
     
     if level is None:
-        level = logging.DEBUG if settings.DEBUG else logging.INFO
+        level = logging.DEBUG if settings.DEBUG else logging.WARNING
     
     logger.setLevel(level)
     

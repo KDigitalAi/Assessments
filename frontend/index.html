@@ -9,8 +9,6 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/styles.css">
-    <!-- Chart.js CDN -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -49,26 +47,16 @@
             <div id="coursesList" class="assessments-grid"></div>
         </section>
 
-        <!-- Skill Progress and Competency Map (Two Column Layout) -->
-        <div class="charts-container">
-            <section class="skill-progress-section">
-                <h2 class="section-title">
-                    <span class="section-icon">📊</span> Skill Progress
-                </h2>
-                <div id="skillProgressChart" class="chart-container">
-                    <canvas id="progressChart"></canvas>
-                </div>
-            </section>
-
-            <section class="competency-map-section">
-                <h2 class="section-title">
-                    <span class="section-icon">🎯</span> Competency Map
-                </h2>
-                <div id="competencyMapChart" class="chart-container">
-                    <canvas id="radarChart"></canvas>
-                </div>
-            </section>
-        </div>
+        <!-- Topic Mastery Scorecard -->
+        <section class="topic-mastery-section">
+            <h2 class="section-title">
+                <span class="section-icon">📚</span> Topic Mastery Scorecard
+            </h2>
+            <p class="topic-mastery-subtitle">Track mastery by topic and identify strengths vs improvement areas.</p>
+            <div id="topicMasteryList" class="topic-mastery-list">
+                <!-- Topic mastery items will be inserted here -->
+            </div>
+        </section>
 
         <!-- Recent Assessments Section -->
         <section class="recent-assessments-section">
