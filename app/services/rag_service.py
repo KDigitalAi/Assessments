@@ -168,17 +168,24 @@ class RAGService:
                 logger.warning("No context chunks provided")
                 return []
             
-            # Combine context chunks
+            # Combine context chunks - CRITICAL: Only include chunk_text, exclude source_name/metadata
+            # This prevents questions about PDF structure, module numbers, or document organization
             context_text = "\n\n".join([
-                f"[{chunk.get('source_name', 'source')}]\n{chunk.get('chunk_text', '')}"
+                chunk.get('chunk_text', '').strip()
                 for chunk in context_chunks[:10]  # Limit to top 10 chunks
+                if chunk.get('chunk_text', '').strip()  # Only include non-empty chunks
             ])
             
             # Build prompt based on question type
             if question_type == "mcq":
-                prompt = f"""Based on the following context from PDF documents, generate {num_questions} multiple-choice question(s) at {difficulty} difficulty level.
+                prompt = f"""Generate {num_questions} multiple-choice question(s) at {difficulty} difficulty level based ONLY on the actual textual content provided below.
 
-Context:
+CRITICAL INSTRUCTIONS:
+- Generate questions ONLY from the actual textual content above
+- Do NOT create questions about module numbers, course structure, training outlines, or document organization
+- Questions must test concepts, definitions, processes, tools, or behaviors explained in the content
+
+CONTENT TEXT (extracted from document):
 {context_text}
 
 For each question, provide:
@@ -198,10 +205,22 @@ Format as JSON array with this structure:
 ]
 """
             elif question_type == "descriptive":
-                prompt = f"""Based on the following context from PDF documents, generate {num_questions} descriptive/open-ended question(s) at {difficulty} difficulty level.
+                prompt = f"""Generate {num_questions} descriptive/open-ended question(s) at {difficulty} difficulty level based ONLY on the actual textual content provided below.
 
-Context:
+CRITICAL INSTRUCTIONS:
+- Generate questions ONLY from the actual textual content above
+- Do NOT create questions about module numbers, course structure, training outlines, or document organization
+- Questions must test concepts, definitions, processes, tools, or behaviors explained in the content
+- Each question must be answerable ONLY by reading the content text above
+
+CONTENT TEXT (extracted from document):
 {context_text}
+
+FORBIDDEN QUESTION PATTERNS (DO NOT CREATE):
+- "What is the focus of Module X?"
+- "Which module covers..."
+- "In this training..."
+- Any question referencing module numbers, lessons, chapters, or course structure
 
 For each question, provide:
 1. Question text
@@ -218,12 +237,27 @@ Format as JSON array with this structure:
     }}
   }}
 ]
-"""
-            else:
-                prompt = f"""Based on the following context from PDF documents, generate {num_questions} question(s) at {difficulty} difficulty level.
 
-Context:
+RESPOND WITH JSON ONLY - No markdown, no explanations, no code blocks outside JSON
+The entire response must be a valid JSON array that can be parsed directly"""
+            else:
+                # DEFAULT/GENERAL: Standard question generation (fallback)
+                prompt = f"""Generate {num_questions} question(s) at {difficulty} difficulty level based ONLY on the actual textual content provided below.
+
+CRITICAL INSTRUCTIONS:
+- Generate questions ONLY from the actual textual content above
+- Do NOT create questions about module numbers, course structure, training outlines, or document organization
+- Questions must test concepts, definitions, processes, tools, or behaviors explained in the content
+- Each question must be answerable ONLY by reading the content text above
+
+CONTENT TEXT (extracted from document):
 {context_text}
+
+FORBIDDEN QUESTION PATTERNS (DO NOT CREATE):
+- "What is the focus of Module X?"
+- "Which module covers..."
+- "In this training..."
+- Any question referencing module numbers, lessons, chapters, or course structure
 
 Format as JSON array with this structure:
 [
@@ -235,7 +269,9 @@ Format as JSON array with this structure:
     "explanation": "Brief explanation"
   }}
 ]
-"""
+
+RESPOND WITH JSON ONLY - No markdown, no explanations, no code blocks outside JSON
+The entire response must be a valid JSON array that can be parsed directly"""
             
             # Generate questions using OpenAI
             response = self.client.chat.completions.create(

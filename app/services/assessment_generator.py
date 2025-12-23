@@ -10,6 +10,7 @@ from app.services.supabase_service import supabase_service
 from app.services.topic_question_service import topic_question_service
 from app.utils.logger import logger
 import json
+import re
 
 
 class AssessmentGenerator:
@@ -153,21 +154,133 @@ class AssessmentGenerator:
         """
         Extract topic/skill domain from PDF source name
         
-        Uses the full PDF title to ensure each PDF gets its own unique course
+        Cleans structural metadata (module numbers, training structure) while preserving content topic
         
         Args:
             source_name: PDF document name
         
         Returns:
-            Extracted topic/skill domain
+            Extracted topic/skill domain (cleaned of structural metadata)
         """
-        # Use full PDF title as skill_domain to ensure each PDF is unique
-        # Clean up the title but keep it unique
+        if not source_name:
+            return "General PDF"
+        
+        # Clean the title
         cleaned_title = source_name.strip()
-        # Remove common prefixes/suffixes but keep the unique part
-        if cleaned_title:
-            return cleaned_title
-        return f"PDF {source_name[:30]}" if source_name else "General PDF"
+        
+        # Remove .pdf extension
+        cleaned_title = re.sub(r'\.pdf$', '', cleaned_title, flags=re.IGNORECASE)
+        
+        # Remove module numbers and patterns like "Module 4:", "Module IV:", etc.
+        cleaned_title = re.sub(r'\bmodule\s+\d+[:\s]*', '', cleaned_title, flags=re.IGNORECASE)
+        cleaned_title = re.sub(r'\bmodule\s+[ivx]+[:\s]*', '', cleaned_title, flags=re.IGNORECASE)
+        
+        # Remove lesson numbers
+        cleaned_title = re.sub(r'\blesson\s+\d+[:\s]*', '', cleaned_title, flags=re.IGNORECASE)
+        
+        # Remove chapter numbers
+        cleaned_title = re.sub(r'\bchapter\s+\d+[:\s]*', '', cleaned_title, flags=re.IGNORECASE)
+        
+        # Remove leading numbers and separators (e.g., "4_", "10_", "1-")
+        cleaned_title = re.sub(r'^\d+[_\-\s]+', '', cleaned_title)
+        
+        # Remove "Training", "Course", "Tutorial" prefixes if they're structural
+        cleaned_title = re.sub(r'^(training|course|tutorial)[:\s]+', '', cleaned_title, flags=re.IGNORECASE)
+        
+        # Remove common structural prefixes
+        cleaned_title = re.sub(r'^(for|on|about)\s+', '', cleaned_title, flags=re.IGNORECASE)
+        
+        # Clean up multiple spaces and trim
+        cleaned_title = re.sub(r'\s+', ' ', cleaned_title).strip()
+        
+        # If title is empty after cleaning, use a generic name
+        if not cleaned_title:
+            cleaned_title = "Content Assessment"
+        
+        return cleaned_title
+    
+    def analyze_content_for_coding_suitability(self, chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Analyze embedding chunks to determine if content supports coding questions.
+        
+        This method examines the content to detect programming-related concepts,
+        code examples, syntax, algorithms, and other coding indicators.
+        
+        Returns:
+            Dictionary with:
+            - supports_coding: bool - Whether content supports coding questions
+            - coding_score: float (0.0 to 1.0) - Confidence score for coding content
+            - coding_keywords_found: list - List of detected coding keywords
+            - recommended_coding_count: int - Recommended number of coding questions (0-16)
+        """
+        if not chunks:
+            return {
+                "supports_coding": False,
+                "coding_score": 0.0,
+                "coding_keywords_found": [],
+                "recommended_coding_count": 0
+            }
+        
+        # Keywords that indicate coding/programming content
+        coding_keywords = [
+            # Code-related terms
+            "code", "function", "method", "class", "variable", "syntax", "compile",
+            "execute", "runtime", "algorithm", "data structure", "array", "list",
+            "loop", "if", "else", "return", "import", "package", "module",
+            # Programming concepts
+            "programming", "implementation", "debug", "error", "exception",
+            "try", "catch", "finally", "public", "private", "static", "void",
+            "int", "string", "boolean", "object", "instance", "constructor",
+            # Code patterns and control flow
+            "for loop", "while loop", "switch", "case", "break", "continue",
+            "recursion", "iteration", "polymorphism", "inheritance", "encapsulation",
+            # Language-specific (Java, Python, JavaScript, etc.)
+            "java", "python", "javascript", "c++", "c#", "typescript",
+            # Code examples indicators
+            "example", "sample code", "code snippet", "program", "application"
+        ]
+        
+        # Combine all chunk text for analysis
+        all_text = " ".join([
+            chunk.get("chunk_text", "").lower() 
+            for chunk in chunks[:20]  # Analyze top 20 chunks for efficiency
+        ])
+        
+        # Count coding keywords found
+        found_keywords = []
+        keyword_count = 0
+        for keyword in coding_keywords:
+            if keyword.lower() in all_text:
+                keyword_count += 1
+                found_keywords.append(keyword)
+        
+        # Calculate coding score (0.0 to 1.0)
+        # Higher score = more suitable for coding questions
+        # Normalize based on number of unique keywords found
+        coding_score = min(keyword_count / 15.0, 1.0)
+        
+        # Determine if content supports coding questions
+        # Threshold: at least 30% coding indicators
+        supports_coding = coding_score >= 0.3
+        
+        # Recommend coding question count based on score
+        # Minimum 7 coding questions if content supports it
+        if supports_coding:
+            if coding_score >= 0.7:
+                recommended_coding_count = 10  # High coding content - more coding questions
+            elif coding_score >= 0.5:
+                recommended_coding_count = 8   # Medium coding content
+            else:
+                recommended_coding_count = 7   # Minimum coding content - still generate 7
+        else:
+            recommended_coding_count = 0  # Theory only - no coding questions
+        
+        return {
+            "supports_coding": supports_coding,
+            "coding_score": coding_score,
+            "coding_keywords_found": found_keywords[:10],  # Top 10 keywords
+            "recommended_coding_count": recommended_coding_count
+        }
     
     def generate_questions_from_chunks(
         self,
@@ -300,15 +413,18 @@ class AssessmentGenerator:
         self,
         pdf_id: str,
         pdf_name: str,
-        num_questions: int = 10
+        num_questions: int = 16  # Default to 16 questions as per requirement
     ) -> Dict[str, Any]:
         """
-        Generate questions for a specific PDF source
+        Generate questions for a specific PDF source.
+        
+        This method generates 16 total questions with at least 7 coding questions
+        when content supports it. The distribution is dynamic based on content analysis.
         
         Args:
             pdf_id: PDF document ID
             pdf_name: PDF document name
-            num_questions: Number of questions to generate (default 10)
+            num_questions: Number of questions to generate (default 16)
         
         Returns:
             Dictionary with success status and generated questions
@@ -330,67 +446,122 @@ class AssessmentGenerator:
             # Determine difficulty
             difficulty = self.determine_difficulty_from_chunks(chunks)
             
-            # Generate questions with mixed difficulty levels
-            # Ensure at least 5 coding questions total
-            num_questions = max(num_questions, 5)  # Ensure minimum 5 questions
-
-            easy_count = max(1, num_questions // 3)  # At least 1 easy
-            medium_count = max(2, (num_questions * 2) // 3)  # At least 2 medium
-            hard_count = max(2, num_questions - easy_count - medium_count)  # At least 2 hard
-
+            # STEP 1: Analyze content for coding suitability
+            content_analysis = self.analyze_content_for_coding_suitability(chunks)
+            supports_coding = content_analysis["supports_coding"]
+            recommended_coding_count = content_analysis["recommended_coding_count"]
+            
+            logger.info(f"Content analysis for {pdf_name}:")
+            logger.info(f"  - Supports coding: {supports_coding}")
+            logger.info(f"  - Coding score: {content_analysis['coding_score']:.2f}")
+            logger.info(f"  - Recommended coding questions: {recommended_coding_count}")
+            
+            # STEP 2: Determine question distribution
+            total_questions = num_questions  # Default 16
+            
+            if supports_coding:
+                # Ensure at least 7 coding questions
+                coding_count = max(7, recommended_coding_count)
+                theory_count = total_questions - coding_count
+                
+                # Ensure we have at least some theory questions (minimum 3)
+                if theory_count < 3:
+                    theory_count = 3
+                    coding_count = total_questions - theory_count
+            else:
+                # Fallback to theory-only if content doesn't support coding
+                coding_count = 0
+                theory_count = total_questions
+                logger.info(f"Content does not support coding questions. Generating {theory_count} theory questions only.")
+            
             all_questions = []
-
-            # Generate easy coding questions
-            if easy_count > 0:
-                easy_questions = topic_question_service.generate_questions_from_embeddings(
-                    topic=topic,
-                    chunks=chunks[:10],
-                    num_questions=easy_count,
-                    question_type="mcq",
-                    difficulty="easy"
-                )
-                all_questions.extend(easy_questions)
-
-            # Generate medium coding questions
-            if medium_count > 0:
-                medium_questions = topic_question_service.generate_questions_from_embeddings(
-                    topic=topic,
-                    chunks=chunks[:20],
-                    num_questions=medium_count,
-                    question_type="mcq",
-                    difficulty="medium"
-                )
-                all_questions.extend(medium_questions)
-
-            # Generate hard coding questions
-            if hard_count > 0:
-                hard_questions = topic_question_service.generate_questions_from_embeddings(
-                    topic=topic,
-                    chunks=chunks,
-                    num_questions=hard_count,
-                    question_type="mcq",
-                    difficulty="hard"
-                )
-                all_questions.extend(hard_questions)
-
-            # Ensure we have at least 5 questions
-            if len(all_questions) < 5:
-                # Generate additional questions to reach minimum
-                additional_needed = 5 - len(all_questions)
-                additional_questions = topic_question_service.generate_questions_from_embeddings(
-                    topic=topic,
-                    chunks=chunks,
-                    num_questions=additional_needed,
-                    question_type="mcq",
-                    difficulty="medium"
-                )
-                all_questions.extend(additional_questions)
+            
+            # STEP 3: Generate theory questions (if needed)
+            if theory_count > 0:
+                # Distribute theory questions across difficulty levels
+                theory_easy = max(1, theory_count // 3)
+                theory_medium = max(1, (theory_count * 2) // 3)
+                theory_hard = theory_count - theory_easy - theory_medium
+                
+                if theory_easy > 0:
+                    theory_easy_q = topic_question_service.generate_questions_from_embeddings(
+                        topic=topic,
+                        chunks=chunks[:10],
+                        num_questions=theory_easy,
+                        question_type="theory",  # Specify theory type
+                        difficulty="easy"
+                    )
+                    all_questions.extend(theory_easy_q)
+                
+                if theory_medium > 0:
+                    theory_medium_q = topic_question_service.generate_questions_from_embeddings(
+                        topic=topic,
+                        chunks=chunks[:20],
+                        num_questions=theory_medium,
+                        question_type="theory",
+                        difficulty="medium"
+                    )
+                    all_questions.extend(theory_medium_q)
+                
+                if theory_hard > 0:
+                    theory_hard_q = topic_question_service.generate_questions_from_embeddings(
+                        topic=topic,
+                        chunks=chunks,
+                        num_questions=theory_hard,
+                        question_type="theory",
+                        difficulty="hard"
+                    )
+                    all_questions.extend(theory_hard_q)
+            
+            # STEP 4: Generate coding questions (if content supports it)
+            if coding_count > 0 and supports_coding:
+                # Distribute coding questions across difficulty levels
+                coding_easy = max(1, coding_count // 3)
+                coding_medium = max(2, (coding_count * 2) // 3)
+                coding_hard = coding_count - coding_easy - coding_medium
+                
+                if coding_easy > 0:
+                    coding_easy_q = topic_question_service.generate_questions_from_embeddings(
+                        topic=topic,
+                        chunks=chunks[:10],
+                        num_questions=coding_easy,
+                        question_type="coding",  # Specify coding type
+                        difficulty="easy"
+                    )
+                    all_questions.extend(coding_easy_q)
+                
+                if coding_medium > 0:
+                    coding_medium_q = topic_question_service.generate_questions_from_embeddings(
+                        topic=topic,
+                        chunks=chunks[:20],
+                        num_questions=coding_medium,
+                        question_type="coding",
+                        difficulty="medium"
+                    )
+                    all_questions.extend(coding_medium_q)
+                
+                if coding_hard > 0:
+                    coding_hard_q = topic_question_service.generate_questions_from_embeddings(
+                        topic=topic,
+                        chunks=chunks,
+                        num_questions=coding_hard,
+                        question_type="coding",
+                        difficulty="hard"
+                    )
+                    all_questions.extend(coding_hard_q)
             
             if not all_questions:
                 return {
                     "success": False,
                     "error": "Failed to generate questions"
                 }
+            
+            # Log final distribution
+            coding_q_count = sum(1 for q in all_questions if q.get("question_type") == "coding")
+            theory_q_count = sum(1 for q in all_questions if q.get("question_type") == "theory")
+            logger.info(f"Generated {len(all_questions)} total questions:")
+            logger.info(f"  - Coding questions: {coding_q_count}")
+            logger.info(f"  - Theory questions: {theory_q_count}")
             
             # Store questions (without source_id and source_type as per user request)
             questions_to_store = []
@@ -401,7 +572,8 @@ class AssessmentGenerator:
                     "options": q.get("options", []),
                     "correct_answer": q.get("correct_answer", ""),
                     "explanation": q.get("explanation", ""),
-                    "difficulty": q.get("difficulty", "medium")
+                    "difficulty": q.get("difficulty", "medium"),
+                    "question_type": q.get("question_type", "theory")  # Store question type (theory | coding)
                     # Note: source_type and source_id are NOT stored as per user requirements
                 })
             
@@ -429,9 +601,32 @@ class AssessmentGenerator:
                     else:
                         logger.warning(f"[WARN] Insert response has no data for batch {i//batch_size + 1}")
                 except Exception as e:
-                    logger.error(f"[FAILED] Error inserting questions batch {i//batch_size + 1}: {str(e)}")
-                    import traceback
-                    logger.error(traceback.format_exc())
+                    error_str = str(e)
+                    # Handle case where question_type column doesn't exist in database
+                    if "question_type" in error_str.lower() and ("column" in error_str.lower() or "does not exist" in error_str.lower()):
+                        logger.warning(f"[WARN] question_type column not found, retrying without it...")
+                        # Remove question_type from batch and retry
+                        batch_without_type = []
+                        for q in batch:
+                            q_copy = q.copy()
+                            q_copy.pop("question_type", None)
+                            batch_without_type.append(q_copy)
+                        try:
+                            response = self.client.table('skill_assessment_questions').insert(batch_without_type).execute()
+                            if response.data:
+                                batch_ids = [q.get('id') for q in response.data]
+                                inserted_ids.extend(batch_ids)
+                                logger.info(f"[OK] Successfully inserted {len(batch_ids)} questions without question_type column")
+                            else:
+                                logger.warning(f"[WARN] Insert response has no data for batch {i//batch_size + 1}")
+                        except Exception as retry_error:
+                            logger.error(f"[FAILED] Error inserting questions batch {i//batch_size + 1}: {str(retry_error)}")
+                            import traceback
+                            logger.error(traceback.format_exc())
+                    else:
+                        logger.error(f"[FAILED] Error inserting questions batch {i//batch_size + 1}: {str(e)}")
+                        import traceback
+                        logger.error(traceback.format_exc())
             
             store_result = {
                 "success": len(inserted_ids) > 0,
@@ -454,7 +649,10 @@ class AssessmentGenerator:
                 "source_type": "pdf",
                 "questions": all_questions,
                 "question_ids": store_result.get("question_ids", []),
-                "difficulty": difficulty
+                "difficulty": difficulty,
+                "coding_count": coding_q_count,
+                "theory_count": theory_q_count,
+                "total_count": len(all_questions)
             }
             
         except Exception as e:

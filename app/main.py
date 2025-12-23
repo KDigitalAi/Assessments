@@ -391,12 +391,14 @@ from app.routes import dashboard
 from app.routes import pdf_upload
 from app.routes import assessments as assessment_routes
 from app.routes import folder_upload
+from app.routes import auth
 
 # Register routers
 app.include_router(dashboard.router)
 app.include_router(assessment_routes.router)
 app.include_router(pdf_upload.router)
 app.include_router(folder_upload.router)
+app.include_router(auth.router)
 
 
 if __name__ == "__main__":

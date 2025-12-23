@@ -105,14 +105,43 @@ CREATE TABLE IF NOT EXISTS skill_assessment_questions (
     correct_answer TEXT NOT NULL,
     explanation TEXT,
     difficulty TEXT DEFAULT 'medium' CHECK (difficulty IN ('easy', 'medium', 'hard')),
+    question_type TEXT DEFAULT 'theory' CHECK (question_type IN ('theory', 'coding', 'mcq', 'descriptive')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 COMMENT ON TABLE skill_assessment_questions IS 'Stores questions generated from PDF embeddings';
 
+-- Migration: Add question_type column if it doesn't exist (for existing databases)
+DO $$ 
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 
+        FROM information_schema.columns 
+        WHERE table_schema = 'public'
+        AND table_name = 'skill_assessment_questions' 
+        AND column_name = 'question_type'
+    ) THEN
+        ALTER TABLE skill_assessment_questions 
+        ADD COLUMN question_type TEXT DEFAULT 'theory';
+        
+        IF NOT EXISTS (
+            SELECT 1 
+            FROM information_schema.table_constraints 
+            WHERE table_schema = 'public'
+            AND table_name = 'skill_assessment_questions' 
+            AND constraint_name = 'skill_assessment_questions_question_type_check'
+        ) THEN
+            ALTER TABLE skill_assessment_questions
+            ADD CONSTRAINT skill_assessment_questions_question_type_check 
+            CHECK (question_type IN ('theory', 'coding', 'mcq', 'descriptive'));
+        END IF;
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_assessment_id ON skill_assessment_questions(assessment_id);
 CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_topic ON skill_assessment_questions(topic);
 CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_difficulty ON skill_assessment_questions(difficulty);
+CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_question_type ON skill_assessment_questions(question_type);
 
 -- ===================================================================
 -- TABLE 5: attempts
@@ -430,4 +459,5 @@ WHERE NOT EXISTS (SELECT 1 FROM courses WHERE name = 'DevOps');
 -- Check vector similarity function
 -- SELECT routine_name FROM information_schema.routines 
 -- WHERE routine_schema = 'public' AND routine_name = 'match_pdf_embeddings';
+
 
