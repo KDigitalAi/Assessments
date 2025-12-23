@@ -40,8 +40,10 @@ class FolderProcessor:
             self.uploads_dir.mkdir(parents=True, exist_ok=True)
             logger.info(f"[OK] Uploads directory ready: {self.uploads_dir.absolute()}")
         except Exception as e:
-            logger.error(f"Error creating uploads directory: {str(e)}")
-            raise
+            # On Vercel/serverless, filesystem is read-only - don't crash
+            logger.warning(f"Could not create uploads directory (safe on serverless): {str(e)}")
+            # Don't raise - allow service to work without local uploads directory
+            # Uploads will be handled via Supabase Storage instead
     
     def get_or_create_course(self, course_name: str) -> Optional[str]:
         """

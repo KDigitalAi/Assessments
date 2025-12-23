@@ -43,13 +43,18 @@ async def lifespan(app: FastAPI):
         logger.warning("[WARN] OpenAI API key appears to be a placeholder. AI features will not work.")
     
     # Ensure default test user exists
-    try:
-        from app.services.profile_service import get_test_user_id, TEST_USER_EMAIL
-        
-        get_test_user_id()
-    except Exception as e:
-        logger.warning(f"Error checking/creating test user: {str(e)}")
-        # Don't fail startup if profile creation fails
+    # NOTE: On Vercel serverless, database calls at startup can timeout
+    # This is disabled for serverless deployments to prevent cold start failures
+    if not os.getenv("VERCEL"):
+        try:
+            from app.services.profile_service import get_test_user_id, TEST_USER_EMAIL
+            
+            get_test_user_id()
+        except Exception as e:
+            logger.warning(f"Error checking/creating test user: {str(e)}")
+            # Don't fail startup if profile creation fails
+    else:
+        logger.info("Skipping test user creation on Vercel serverless (will be created on first use)")
     
     # PDF Processing Note:
     # PDF processing has been moved to a separate script to ensure fast server startup.

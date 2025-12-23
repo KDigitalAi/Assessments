@@ -15,10 +15,10 @@ class SupabaseService:
     
     def __init__(self):
         """Initialize Supabase client"""
+        # Defer initialization to first use so serverless cold starts
+        # (and missing env vars) do not crash at import time.
         self.client: Optional[Client] = None  # Anon key client (for regular operations)
         self.service_client: Optional[Client] = None  # Service key client (for admin operations)
-        self._initialize_client()
-        self._initialize_service_client()
     
     def _initialize_client(self):
         """Initialize Supabase client with anon key (for regular operations)"""

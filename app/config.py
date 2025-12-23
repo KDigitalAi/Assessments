@@ -12,9 +12,14 @@ from dotenv import load_dotenv
 # Get the project root directory (parent of 'app' folder)
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Load .env file from project root explicitly
+# Load .env file from project root explicitly (only if file exists)
+# On Vercel, environment variables are set directly, not from .env file
 env_path = BASE_DIR / ".env"
-load_dotenv(dotenv_path=env_path, override=True)
+if env_path.exists():
+    load_dotenv(dotenv_path=env_path, override=True)
+else:
+    # On Vercel/serverless, env vars come from platform settings
+    load_dotenv()  # Try to load from current directory (won't fail if no file)
 
 
 class Settings(BaseSettings):
