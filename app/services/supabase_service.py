@@ -63,19 +63,16 @@ class SupabaseService:
                 logger.warning(f"[WARN] SUPABASE_KEY seems too short ({len(settings.SUPABASE_KEY)} chars). Please verify it's correct.")
             
             # Create client with anon key
-            logger.info(f"🔌 Initializing Supabase client (anon key) with URL: {settings.SUPABASE_URL[:30]}...")
             self.client = create_client(
                 settings.SUPABASE_URL,
                 settings.SUPABASE_KEY
             )
-            logger.info("✅ Supabase client (anon key) created successfully")
             
             # Test connection with a simple query
             try:
                 # Try to query a table that should exist (or at least check if we can connect)
                 # This is a lightweight test that doesn't require any specific table
                 _ = self.client.table("profiles").select("id").limit(0).execute()
-                logger.info("✅ Supabase connection test passed")
             except Exception as test_error:
                 # If profiles table doesn't exist, that's okay - we just want to verify connection works
                 error_msg = str(test_error).lower()
@@ -115,12 +112,10 @@ class SupabaseService:
                 logger.warning(f"[WARN] SUPABASE_SERVICE_KEY seems too short ({len(settings.SUPABASE_SERVICE_KEY)} chars). Please verify it's correct.")
             
             # Create client with service key
-            logger.info(f"🔌 Initializing Supabase service client (service key) with URL: {settings.SUPABASE_URL[:30]}...")
             self.service_client = create_client(
                 settings.SUPABASE_URL,
                 settings.SUPABASE_SERVICE_KEY
             )
-            logger.info("✅ Supabase service client (service key) created successfully")
             
         except Exception as e:
             logger.error(f"[WARN] Failed to initialize Supabase service client: {str(e)}. Admin operations may be unavailable.")

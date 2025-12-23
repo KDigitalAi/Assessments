@@ -5,6 +5,8 @@ Uses OpenAI embeddings API for topic search (does not store new embeddings)
 
 from typing import List, Optional
 from openai import OpenAI
+from openai import APITimeoutError, APIConnectionError, RateLimitError, APIError
+import time
 from app.config import settings
 from app.utils.logger import logger
 
@@ -18,10 +20,16 @@ class EmbeddingService:
         self._initialize_openai_client()
     
     def _initialize_openai_client(self):
-        """Initialize OpenAI client"""
+        """Initialize OpenAI client with timeout configuration"""
         try:
             if settings.OPENAI_API_KEY and "your-openai" not in settings.OPENAI_API_KEY:
-                self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
+                # Configure timeout: 60s connect, 300s read/write (5 minutes for large batches)
+                from openai import Timeout
+                timeout = Timeout(connect=60.0, read=300.0, write=300.0, pool=300.0)
+                self.client = OpenAI(
+                    api_key=settings.OPENAI_API_KEY,
+                    timeout=timeout
+                )
             else:
                 logger.warning("OpenAI API key not configured. Embedding features will not work.")
                 self.client = None
@@ -64,8 +72,25 @@ class EmbeddingService:
             
             return response.data[0].embedding
             
+        except APITimeoutError as e:
+            logger.error(f"Timeout error generating embedding: {str(e)}")
+            logger.error("Request took too long - consider reducing chunk size or checking network")
+            return None
+        except APIConnectionError as e:
+            logger.error(f"Connection error generating embedding: {str(e)}")
+            logger.error("Network connectivity issue - check internet connection")
+            return None
+        except RateLimitError as e:
+            logger.error(f"Rate limit error generating embedding: {str(e)}")
+            logger.error("API rate limit exceeded - wait before retrying")
+            return None
+        except APIError as e:
+            logger.error(f"OpenAI API error generating embedding: {str(e)}")
+            logger.error(f"API error type: {type(e).__name__}")
+            return None
         except Exception as e:
-            logger.error(f"Error generating embedding: {str(e)}")
+            logger.error(f"Unexpected error generating embedding: {str(e)}")
+            logger.error(f"Error type: {type(e).__name__}")
             return None
     
     def generate_embeddings_batch(self, texts: List[str], batch_size: int = 100) -> List[Optional[List[float]]]:
@@ -105,23 +130,72 @@ class EmbeddingService:
                     embeddings.extend([None] * len(batch))
                     continue
                 
-                try:
-                    response = self.client.embeddings.create(
-                        model=settings.OPENAI_EMBEDDING_MODEL,
-                        input=valid_texts
-                    )
-                    
-                    # Map embeddings back to original positions
-                    batch_embeddings = [None] * len(batch)
-                    for idx, embedding_data in enumerate(response.data):
-                        original_idx = valid_indices[idx]
-                        batch_embeddings[original_idx] = embedding_data.embedding
-                    
-                    embeddings.extend(batch_embeddings)
-                    
-                except Exception as e:
-                    logger.error(f"Error in batch embedding generation: {str(e)}")
-                    embeddings.extend([None] * len(batch))
+                # Retry logic for network issues
+                max_retries = 3
+                retry_delay = 2  # Start with 2 seconds
+                batch_num = i//batch_size + 1
+                
+                for attempt in range(max_retries):
+                    try:
+                        if attempt > 0:
+                            logger.info(f"  Retry attempt {attempt}/{max_retries-1} for batch {batch_num}...")
+                            time.sleep(retry_delay * attempt)  # Exponential backoff
+                        
+                        logger.info(f"  Calling OpenAI API for batch {batch_num} ({len(valid_texts)} texts)...")
+                        response = self.client.embeddings.create(
+                            model=settings.OPENAI_EMBEDDING_MODEL,
+                            input=valid_texts
+                        )
+                        
+                        # Map embeddings back to original positions
+                        batch_embeddings = [None] * len(batch)
+                        for idx, embedding_data in enumerate(response.data):
+                            original_idx = valid_indices[idx]
+                            batch_embeddings[original_idx] = embedding_data.embedding
+                        
+                        embeddings.extend(batch_embeddings)
+                        logger.info(f"  Successfully generated {len(valid_texts)} embeddings for batch {batch_num}")
+                        break  # Success, exit retry loop
+                        
+                    except APITimeoutError as e:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"  Timeout on batch {batch_num}, attempt {attempt+1}/{max_retries}: {str(e)}")
+                            continue
+                        else:
+                            logger.error(f"  [FAILED] Timeout error in batch {batch_num} after {max_retries} attempts: {str(e)}")
+                            logger.error("  Request timed out - network may be slow or batch too large")
+                            embeddings.extend([None] * len(batch))
+                    except APIConnectionError as e:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"  Connection error on batch {batch_num}, attempt {attempt+1}/{max_retries}: {str(e)}")
+                            continue
+                        else:
+                            logger.error(f"  [FAILED] Connection error in batch {batch_num} after {max_retries} attempts: {str(e)}")
+                            logger.error("  Network connectivity issue - check internet connection")
+                            embeddings.extend([None] * len(batch))
+                    except RateLimitError as e:
+                        # Rate limits need longer wait
+                        wait_time = retry_delay * (2 ** attempt) * 5  # Longer wait for rate limits
+                        if attempt < max_retries - 1:
+                            logger.warning(f"  Rate limit on batch {batch_num}, waiting {wait_time}s before retry {attempt+1}/{max_retries}")
+                            time.sleep(wait_time)
+                            continue
+                        else:
+                            logger.error(f"  [FAILED] Rate limit error in batch {batch_num} after {max_retries} attempts: {str(e)}")
+                            logger.error("  API rate limit exceeded - wait before processing more")
+                            embeddings.extend([None] * len(batch))
+                    except APIError as e:
+                        logger.error(f"  [FAILED] OpenAI API error in batch {batch_num}: {str(e)}")
+                        logger.error(f"  API error type: {type(e).__name__}")
+                        embeddings.extend([None] * len(batch))
+                        break  # Don't retry API errors (they won't succeed on retry)
+                    except Exception as e:
+                        import traceback
+                        logger.error(f"  [FAILED] Unexpected error in batch {batch_num}: {str(e)}")
+                        logger.error(f"  Error type: {type(e).__name__}")
+                        logger.error(f"  Full traceback:\n{traceback.format_exc()}")
+                        embeddings.extend([None] * len(batch))
+                        break  # Don't retry unexpected errors
             
             return embeddings
             

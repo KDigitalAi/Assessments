@@ -1,6 +1,6 @@
 """
 Service for generating questions from topics using existing embeddings
-Reuses embeddings from vimeo_video_chatbot project without re-processing
+Reuses PDF embeddings without re-processing
 """
 
 from typing import List, Dict, Any, Optional
@@ -36,16 +36,16 @@ class TopicQuestionService:
     def fetch_embeddings_by_topic(
         self,
         topic: str,
-        source_type: Optional[str] = None,  # 'video', 'pdf', or None for both
+        pdf_id: Optional[str] = None,
         match_threshold: float = 0.7,
         match_count: int = 10
     ) -> List[Dict[str, Any]]:
         """
-        Fetch relevant content chunks by topic using existing embeddings
+        Fetch relevant content chunks by topic using existing PDF embeddings
         
         Args:
             topic: Topic or subject (e.g., "JavaScript", "React", "Machine Learning")
-            source_type: Type of source ('video', 'pdf', or None for both)
+            pdf_id: Optional PDF ID to filter by specific document
             match_threshold: Similarity threshold (0-1)
             match_count: Maximum number of chunks to retrieve
         
@@ -54,11 +54,10 @@ class TopicQuestionService:
         """
         try:
             # Use existing RAG service to search for similar chunks
-            # This reuses existing embeddings without re-processing
+            # This reuses existing PDF embeddings without re-processing
             chunks = rag_service.search_similar_chunks(
                 query_text=topic,
-                source_type=source_type,
-                source_id=None,
+                pdf_id=pdf_id,
                 match_threshold=match_threshold,
                 match_count=match_count
             )
@@ -104,7 +103,7 @@ class TopicQuestionService:
             
             # Combine context chunks
             context_text = "\n\n".join([
-                f"[{chunk.get('source_type', 'unknown').upper()} - {chunk.get('source_name', 'source')}]\n{chunk.get('chunk_text', '')}"
+                f"[{chunk.get('source_name', 'source')}]\n{chunk.get('chunk_text', '')}"
                 for chunk in chunks[:10]  # Limit to top 10 chunks
             ])
             
@@ -187,19 +186,15 @@ Ensure all questions are relevant to the topic "{topic}" and based on the provid
             if not isinstance(questions, list):
                 questions = [questions]
             
-            # Add metadata and determine source type
-            source_types = set(chunk.get('source_type') for chunk in chunks[:5])
-            source_type = 'both' if len(source_types) > 1 else (list(source_types)[0] if source_types else None)
-            
-            # Get source_id from first chunk if available
-            source_id = chunks[0].get('source_id') if chunks else None
+            # Get pdf_id from first chunk if available
+            pdf_id = chunks[0].get('source_id') if chunks else None
             
             # Enhance questions with metadata
             for question in questions:
                 question['topic'] = topic
                 question['difficulty'] = difficulty
-                question['source_type'] = source_type
-                question['source_id'] = source_id
+                question['source_type'] = 'pdf'
+                question['source_id'] = pdf_id
                 question['question_type'] = question_type
             
             return questions
@@ -273,7 +268,7 @@ Ensure all questions are relevant to the topic "{topic}" and based on the provid
     def generate_and_store_questions(
         self,
         topic: str,
-        source_type: Optional[str] = None,
+        pdf_id: Optional[str] = None,
         num_questions: int = 5,
         question_type: str = "mcq",
         difficulty: str = "medium",
@@ -285,7 +280,7 @@ Ensure all questions are relevant to the topic "{topic}" and based on the provid
         
         Args:
             topic: Topic or subject
-            source_type: Type of source ('video', 'pdf', or None for both)
+            pdf_id: Optional PDF ID to filter by specific document
             num_questions: Number of questions to generate (5-10)
             question_type: Type of question ('mcq' or 'descriptive')
             difficulty: Difficulty level ('easy', 'medium', 'hard')
@@ -296,10 +291,10 @@ Ensure all questions are relevant to the topic "{topic}" and based on the provid
             Dictionary with success status and generated questions
         """
         try:
-            # Step 1: Fetch relevant content using existing embeddings
+            # Step 1: Fetch relevant content using existing PDF embeddings
             chunks = self.fetch_embeddings_by_topic(
                 topic=topic,
-                source_type=source_type,
+                pdf_id=pdf_id,
                 match_threshold=match_threshold,
                 match_count=match_count
             )

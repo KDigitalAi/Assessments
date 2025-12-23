@@ -13,11 +13,11 @@ router = APIRouter(prefix="/api", tags=["Assessments"])
 @router.post("/generateAssessments")
 async def generate_assessments():
     """
-    Generate assessments from all existing embeddings
+    Generate assessments from all existing PDF embeddings
     
     This endpoint:
-    1. Reads all video_embeddings and pdf_embeddings
-    2. Generates 10 MCQ questions for each source
+    1. Reads all pdf_embeddings
+    2. Generates 10 MCQ questions for each PDF
     3. Categorizes questions by difficulty
     4. Stores questions in skill_assessment_questions
     5. Creates assessment entries in assessments table
@@ -111,12 +111,12 @@ async def get_assessment_stats():
 @router.post("/embeddings/sync")
 async def sync_embeddings():
     """
-    Sync embeddings: Convert all video_embeddings and pdf_embeddings into questions and assessments
+    Sync embeddings: Convert all pdf_embeddings into questions and assessments
     
     This endpoint:
-    1. Reads all embeddings from video_embeddings and pdf_embeddings tables
-    2. For each embedding chunk, generates a question using OpenAI
-    3. Groups every 10 questions into an assessment
+    1. Reads all embeddings from pdf_embeddings table
+    2. For each PDF, generates questions using OpenAI
+    3. Creates one assessment per PDF with generated questions
     4. Stores questions in skill_assessment_questions table
     5. Creates assessment entries in assessments table
     

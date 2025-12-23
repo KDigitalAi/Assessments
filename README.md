@@ -11,17 +11,32 @@
 
 ## Overview
 
-**Skill Assessment Builder** is a web-based platform that automates the assessment lifecycle. The system reads existing PDF and video embeddings from a Supabase database, generates high-quality MCQ questions using OpenAI GPT-4, organizes assessments by courses, and provides a web interface for users to take assessments with automated scoring and personalized feedback.
+**Skill Assessment Builder** is a **PDF-based AI Assessment Platform** that automates the complete assessment lifecycle. This is a **self-contained system** using a **separate Supabase database** dedicated exclusively to assessments.
+
+### Complete Pipeline
+
+**PDF → Embeddings → Questions → Assessments → Courses → Attempts → Results**
+
+The system:
+- Uploads PDF documents via web interface
+- Extracts text and generates vector embeddings
+- Uses RAG (Retrieval-Augmented Generation) to generate contextual MCQ questions
+- Creates assessments organized by courses
+- Delivers assessments through a web interface
+- Automatically scores responses and provides AI-generated feedback
 
 ### Key Features
 
-- 🤖 **AI-Powered Question Generation**: Automatically generates MCQ questions from PDF/video content using OpenAI GPT-4
+- 📄 **PDF-Only System**: Upload and process PDF documents exclusively (no video, no chatbot)
+- 🔄 **End-to-End Pipeline**: Complete workflow from PDF upload to assessment results
+- 🤖 **AI-Powered Question Generation**: Automatically generates MCQ questions from PDF content using OpenAI GPT-4
+- 🔍 **RAG-Powered**: Uses vector embeddings for context-aware question generation
 - 📚 **Course-Based Organization**: Organizes assessments by courses with automatic course detection
 - 🎯 **Automated Scoring**: Instant scoring for MCQ questions
 - 💬 **Personalized Feedback**: AI-generated feedback based on performance
 - 🔐 **JWT Authentication**: Secure authentication via Supabase Auth
 - 📊 **Progress Tracking**: Monitor user progress across courses and assessments
-- 🔍 **RAG-Powered Content Retrieval**: Uses vector embeddings for context-aware question generation
+- 🗄️ **Self-Contained Database**: Separate Supabase project dedicated to assessments
 
 ---
 
@@ -36,21 +51,38 @@ The system consists of:
 5. **Frontend Application**: HTML/JavaScript client served as static files by FastAPI
 6. **Service Layer**: Python services for assessment generation, RAG search, feedback generation, and database operations
 
-### Data Flow
+### Complete Data Flow
 
-**Assessment Generation:**
-1. System reads existing PDF/video embeddings from Supabase
-2. Extracts content chunks and topics
-3. Generates questions using OpenAI GPT-4 via RAG search
-4. Stores questions and creates assessment records
-5. Organizes assessments by courses
+**Phase 1: PDF Upload & Processing**
+1. User uploads PDF via web interface
+2. File stored in Supabase Storage (bucket: `pdfs`)
+3. PDF metadata recorded in `pdf_documents` table
+4. Processing status tracked in `pdf_processing_log`
 
-**Assessment Taking:**
+**Phase 2: Text Extraction & Embedding**
+1. Extract text page-by-page from PDF
+2. Chunk text into 500-1000 character segments
+3. Generate embeddings using OpenAI `text-embedding-3-small`
+4. Store chunks and embeddings in `pdf_embeddings` table
+
+**Phase 3: Question Generation (RAG)**
+1. Perform vector similarity search on `pdf_embeddings`
+2. Retrieve relevant context chunks
+3. Generate MCQ questions using OpenAI GPT-4
+4. Store questions in `skill_assessment_questions` table
+
+**Phase 4: Assessment Creation**
+1. Group questions by topic/skill domain
+2. Create assessment record in `assessments` table
+3. Link to course via `course_id` in `courses` table
+
+**Phase 5: User Assessment**
 1. User authenticates via Supabase Auth (JWT token)
 2. Views courses and assessments via frontend
-3. Starts assessment (creates attempt record)
-4. Answers questions and submits
-5. Receives automated scoring and AI-generated feedback
+3. Starts assessment → creates `attempts` record
+4. Answers questions → stored in `responses` table
+5. System scores answers automatically
+6. Generate AI feedback → stored in `results` table
 
 For detailed architecture documentation, see [ARCHITECTURE.tex](ARCHITECTURE.tex).
 
@@ -87,9 +119,10 @@ For detailed architecture documentation, see [ARCHITECTURE.tex](ARCHITECTURE.tex
 ### Prerequisites
 
 - **Python 3.10+** (Python 3.12 recommended)
-- **Supabase Account** with a project
-- **OpenAI API Key** (for question generation)
+- **Supabase Account** with a **NEW project** (separate from chatbot/RAG database)
+- **OpenAI API Key** (for question generation and embeddings)
 - **Git** (for cloning repository)
+- **PyPDF2** (for PDF text extraction): `pip install PyPDF2`
 
 ### Step 1: Clone Repository
 
@@ -146,35 +179,66 @@ CORS_ORIGINS=http://localhost:3000,http://localhost:5173
 
 ## Supabase Setup
 
-### Step 1: Create Supabase Project
+### Step 1: Create NEW Supabase Project
+
+**CRITICAL**: Create a **separate Supabase project** for this assessment system.
 
 1. Go to https://app.supabase.com
-2. Create a new project
-3. Wait for database initialization
+2. Click **"New Project"**
+3. Name it: `assessment-platform` (or your preferred name)
+4. Wait for database initialization
+5. **Do NOT reuse your existing chatbot/RAG database**
 
 ### Step 2: Run Database Schema
 
 1. Go to **SQL Editor** in Supabase Dashboard
-2. Open `app/models/unified_schema.sql`
+2. Open `app/models/assessment_schema.sql`
 3. Copy and paste the entire SQL script
 4. Click **Run** to execute
 
-This creates all required tables, indexes, foreign keys, and enables the pgvector extension.
+This creates exactly **10 tables**:
+- **7 Core Assessment Tables**: profiles, courses, assessments, skill_assessment_questions, attempts, responses, results
+- **3 PDF/RAG Tables**: pdf_documents, pdf_embeddings, pdf_processing_log
 
-### Step 3: Configure Row Level Security (RLS)
+Also creates:
+- Vector similarity search function: `match_pdf_embeddings()`
+- Indexes for performance
+- Foreign key constraints
+- Auto-update triggers
+
+### Step 3: Create Storage Bucket
+
+1. Go to **Storage** in Supabase Dashboard
+2. Click **"New bucket"**
+3. Name: `pdfs`
+4. Set to **Public** (or configure RLS policies)
+5. This bucket stores uploaded PDF files
+
+### Step 4: Configure Row Level Security (RLS)
 
 Ensure RLS policies are configured:
 - Anonymous users can read published assessments
 - Authenticated users can create attempts and responses
 - Users can only access their own attempts and results
-- Service role key bypasses RLS for admin operations
+- Service role key bypasses RLS for admin operations (PDF processing, assessment creation)
 
-### Step 4: Verify Tables
+### Step 5: Verify Setup
 
-Check that these tables exist:
-- `profiles`, `courses`, `assessments`
-- `skill_assessment_questions`, `attempts`, `responses`, `results`
-- `pdf_embeddings`, `video_embeddings` (for content sources)
+Run this query in SQL Editor to verify all tables exist:
+
+```sql
+SELECT table_name 
+FROM information_schema.tables 
+WHERE table_schema = 'public' 
+    AND table_name IN (
+        'profiles', 'courses', 'assessments',
+        'skill_assessment_questions', 'attempts', 'responses', 'results',
+        'pdf_documents', 'pdf_embeddings', 'pdf_processing_log'
+    )
+ORDER BY table_name;
+```
+
+Should return exactly **10 rows**.
 
 ---
 
@@ -191,6 +255,23 @@ Check that these tables exist:
 ```bash
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
+
+### API Endpoints
+
+**PDF Upload & Processing:**
+- `POST /api/pdf/upload` - Upload PDF file
+- `GET /api/pdf/list` - List all uploaded PDFs
+- `GET /api/pdf/{pdf_id}/status` - Get PDF processing status
+
+**Assessment Generation:**
+- `POST /api/generateAssessments` - Generate assessments from PDFs
+- `POST /api/embeddings/sync` - Sync embeddings and generate assessments
+
+**Assessment Taking:**
+- `GET /api/getAssessments` - Get all assessments
+- `POST /api/startAssessment` - Start an assessment attempt
+- `POST /api/submitResponse` - Submit answer
+- `POST /api/submitAssessment` - Complete assessment
 
 ### Access Points
 
@@ -215,7 +296,7 @@ python scripts/generate_all_assessments.py
 ```
 
 This process:
-1. Reads all PDF and video embeddings from the database
+1. Reads all PDF embeddings from the database
 2. Generates 10 MCQ questions per source using OpenAI
 3. Creates assessment records linked to courses
 4. Stores questions in the database
@@ -290,7 +371,7 @@ Assessments/
 │   ├── config.py                 # Configuration & settings
 │   ├── models/                   # Database models & schemas
 │   │   ├── schemas.py            # Pydantic schemas
-│   │   └── unified_schema.sql    # Database schema
+│   │   └── assessment_schema.sql    # Database schema (PDF-only)
 │   ├── routes/                   # API route handlers
 │   │   ├── dashboard.py          # Main dashboard endpoints
 │   │   ├── assessments.py        # Assessment generation endpoints
@@ -338,7 +419,6 @@ Assessments/
 - **responses**: Individual question responses with scores
 - **results**: Aggregated assessment results with AI-generated feedback
 - **pdf_embeddings**: PDF content chunks with vector embeddings (populated externally)
-- **video_embeddings**: Video transcript chunks with vector embeddings (populated externally)
 
 ---
 
@@ -413,8 +493,8 @@ Assessments/
 - Get key from https://platform.openai.com/api-keys
 
 **"Table does not exist"**
-- Run `app/models/unified_schema.sql` in Supabase SQL Editor
-- Verify all tables are created successfully
+- Run `app/models/assessment_schema.sql` in Supabase SQL Editor
+- Verify all 10 tables are created successfully
 
 **"Invalid or expired token"**
 - Token may have expired (default: 1 hour)

@@ -51,28 +51,20 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Error checking/creating test user: {str(e)}")
         # Don't fail startup if profile creation fails
     
-    # Check if assessments exist, if not generate them automatically
-    try:
-        from app.services.supabase_service import supabase_service
-        from app.services.assessment_generator import assessment_generator
-        
-        client = supabase_service.get_client()
-        if client:
-            # Check if any published assessments exist
-            assessments_response = client.table("assessments")\
-                .select("id", count="exact")\
-                .eq("status", "published")\
-                .execute()
-            
-            assessment_count = assessments_response.count if hasattr(assessments_response, 'count') else 0
-            
-            if assessment_count == 0:
-                asyncio.create_task(asyncio.to_thread(assessment_generator.generate_all_assessments))
-        else:
-            logger.warning("Supabase client not available. Cannot check for existing assessments.")
-    except Exception as e:
-        logger.warning(f"Error checking/generating assessments on startup: {str(e)}")
-        # Don't fail startup if assessment generation fails
+    # PDF Processing Note:
+    # PDF processing has been moved to a separate script to ensure fast server startup.
+    # Heavy processing (PDF extraction, chunking, embedding generation, question generation)
+    # should NOT run during web server startup as it causes 10-15 minute delays.
+    #
+    # To process PDFs, run the standalone script:
+    #   python scripts/process_uploads.py
+    #
+    # This ensures:
+    # - Fast server startup (seconds, not minutes)
+    # - Separation of concerns (web server vs. background processing)
+    # - Production-safe architecture
+    # - No blocking operations during startup
+    logger.info("FastAPI server started. PDF processing is handled by external script: python scripts/process_uploads.py")
     
     # Start cache cleanup task
     async def cache_cleanup_loop():
@@ -159,8 +151,6 @@ else:
         if origin not in cors_origins:
             cors_origins.append(origin)
     cors_allow_credentials = True if cors_origins else False
-
-# Log CORS configuration for debugging
 
 app.add_middleware(
     CORSMiddleware,
@@ -270,9 +260,8 @@ async def health_check():
             except Exception as e:
                 logger.warning(f"Validation check failed: {str(e)}")
         
-        # Check environment (Vercel vs local)
-        is_vercel_env = os.getenv("VERCEL") == "1" or "vercel.app" in os.getenv("VERCEL_URL", "")
-        environment = "vercel" if is_vercel_env else "local"
+        # Check environment (Vercel vs local) - reuse is_vercel from above
+        environment = "vercel" if is_vercel else "local"
         
         response = {
             "status": "healthy",
@@ -398,13 +387,16 @@ async def assessments_page():
 
 
 # Include routers
-# Dashboard router (unified API - main endpoints)
 from app.routes import dashboard
-app.include_router(dashboard.router)
-
-# Assessment generation router
+from app.routes import pdf_upload
 from app.routes import assessments as assessment_routes
+from app.routes import folder_upload
+
+# Register routers
+app.include_router(dashboard.router)
 app.include_router(assessment_routes.router)
+app.include_router(pdf_upload.router)
+app.include_router(folder_upload.router)
 
 
 if __name__ == "__main__":

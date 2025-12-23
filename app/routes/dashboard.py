@@ -88,10 +88,9 @@ async def get_assessments():
                 logger.error("   SOLUTION: Ensure RLS policies allow SELECT on 'assessments' table for anonymous users.")
             assessments = []
         
-        # Group assessments by course_id (convert to string for consistent comparison)
-        # Also handle assessments without course_id by grouping them by skill_domain
+        # Group assessments by course_id (STRICT ISOLATION)
+        # Only assessments with course_id are included (no mixing between courses)
         course_assessments = {}
-        assessments_without_course = {}  # Group by skill_domain for assessments without course_id
         
         for assessment in assessments:
             course_id = assessment.get("course_id")
@@ -101,12 +100,7 @@ async def get_assessments():
                 if course_id_str not in course_assessments:
                     course_assessments[course_id_str] = []
                 course_assessments[course_id_str].append(assessment)
-            else:
-                # Handle assessments without course_id - group by skill_domain
-                skill_domain = assessment.get("skill_domain", "General")
-                if skill_domain not in assessments_without_course:
-                    assessments_without_course[skill_domain] = []
-                assessments_without_course[skill_domain].append(assessment)
+            # STRICT: Skip assessments without course_id (they don't belong to any course)
         
         # Format courses with assessment counts
         formatted_courses = []
@@ -154,7 +148,10 @@ async def get_assessments():
                 "assessments": course_assessments_list
             })
         
-        # Normalize domain name function (used for both courses and assessments)
+        # STRICT ISOLATION: Only show courses with assessments
+        # Assessments without course_id are excluded (they don't belong to any course)
+        
+        # Normalize domain name function
         def normalize_domain(raw_name: str) -> str:
             """Normalize course domain name."""
             if not raw_name or not isinstance(raw_name, str):
@@ -169,49 +166,14 @@ async def get_assessments():
             normalized_words = [word.capitalize() for word in words]
             return " ".join(normalized_words)
         
-        # Create virtual courses for assessments without course_id
-        # For PDFs: Create one course per assessment (one PDF = one course)
-        # Group by assessment title to ensure each PDF gets its own course
-        assessment_courses = {}
-        for skill_domain, skill_assessments in assessments_without_course.items():
-            for assessment in skill_assessments:
-                # Use assessment title as unique identifier for each PDF
-                # This ensures one PDF = one course
-                assessment_title = assessment.get("title", "")
-                assessment_id = assessment.get("id", "")
-                
-                # Create unique course key from title or use assessment ID
-                if assessment_title:
-                    # Use title as course identifier (each unique title = one course)
-                    course_key = assessment_title
-                    course_name = normalize_domain(assessment_title.replace(" Assessment", "").replace("_", " "))
-                else:
-                    # Fallback to assessment ID if no title
-                    course_key = f"assessment_{assessment_id}"
-                    course_name = normalize_domain(skill_domain)
-                
-                if course_key not in assessment_courses:
-                    assessment_courses[course_key] = {
-                        "id": f"assessment_{assessment_id}",
-                        "name": course_name,
-                        "skill_domain": course_name,
-                        "skill_name": course_name,
-                        "test_count": 0,
-                        "assessments": []
-                    }
-                
-                assessment_courses[course_key]["assessments"].append(assessment)
-                assessment_courses[course_key]["test_count"] += 1
-        
-        # Add all assessment-based courses to formatted_courses
-        for course_data in assessment_courses.values():
-            course_data["progress"] = min(course_data["test_count"] * 5, 100) if course_data["test_count"] > 0 else 0
-            formatted_courses.append(course_data)
-        
-        
         # Format individual assessments for backward compatibility
+        # Only include assessments that belong to courses (have course_id)
         formatted_assessments = []
         for assessment in assessments:
+            # STRICT: Only include assessments with course_id
+            if not assessment.get("course_id"):
+                continue
+                
             raw_skill = assessment.get("skill_domain", "Unknown")
             skill = normalize_domain(raw_skill)
             
@@ -273,13 +235,18 @@ async def get_assessments():
 @router.get("/assessments/by_course/{course_id}")
 async def get_assessments_by_course(course_id: str):
     """
-    Get assessments filtered by course_id
+    Get assessments filtered by course_id (STRICT ISOLATION)
+    
+    This endpoint ensures:
+    - Only assessments belonging to the specified course are returned
+    - No assessments from other courses are included
+    - Course isolation is strictly enforced
     
     Args:
         course_id: Course UUID
     
     Returns:
-        List of assessments for the specified course
+        List of assessments for the specified course ONLY
     """
     try:
         client = supabase_service.get_client()
@@ -289,25 +256,31 @@ async def get_assessments_by_course(course_id: str):
                 detail="Database service unavailable"
             )
         
-        # Get course name first
+        # Get course name first (verify course exists)
         course_response = client.table("courses")\
-            .select("name")\
+            .select("id, name")\
             .eq("id", course_id)\
             .limit(1)\
             .execute()
         
-        course_name = "Course"
-        if course_response.data and len(course_response.data) > 0:
-            course_name = course_response.data[0].get("name", "Course")
+        if not course_response.data or len(course_response.data) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Course not found: {course_id}"
+            )
         
-        # Get assessments by course_id
+        course_name = course_response.data[0].get("name", "Course")
+        
+        # Get assessments by course_id ONLY (strict filtering)
         assessments_response = client.table("assessments")\
             .select("*")\
             .eq("status", "published")\
             .eq("course_id", course_id)\
-            .execute()
+            .execute()  # STRICT: Only assessments for this course
         
         assessments = assessments_response.data if assessments_response.data else []
+        
+        logger.info(f"✅ Retrieved {len(assessments)} assessment(s) for course: {course_name} (ID: {course_id})")
         
         # Normalize domain name function (same as get_assessments)
         def normalize_domain(raw_name: str) -> str:
@@ -618,7 +591,7 @@ async def start_assessment(
     """
     Start an assessment and generate/fetch questions using existing embeddings
     
-    Uses existing embeddings from vimeo_video_chatbot project to generate questions
+    Uses existing PDF embeddings to generate questions
     """
     try:
         # Generate a temporary user ID for session tracking (optional, can use None)

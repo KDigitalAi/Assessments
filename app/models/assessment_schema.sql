@@ -1,16 +1,17 @@
 -- ===================================================================
--- UNIFIED DATABASE SCHEMA FOR SKILL CAPITAL ASSESSMENT + RAG SYSTEM
+-- ASSESSMENT PROJECT DATABASE SCHEMA
 -- ===================================================================
--- This schema creates all tables needed for both:
---   1. Skill Assessment module (assessments, attempts, questions, results)
---   2. RAG Chatbot module (video embeddings, PDF embeddings, chat history)
+-- Self-contained Assessment System - PDF Only
+-- Separate Supabase Database
 -- 
--- IMPORTANT NOTES:
--- - This schema uses CREATE TABLE IF NOT EXISTS to avoid conflicts
--- - RAG tables (video_embeddings, pdf_embeddings, chat_history, user_queries)
---   are documented but assumed to already exist from the vimeo_video_chatbot project
--- - If RAG tables don't exist, you'll need to create them separately
--- - Run this in Supabase SQL Editor with proper permissions
+-- This schema creates exactly 10 tables:
+--   7 Core Assessment Tables
+--   3 PDF/RAG Tables
+-- 
+-- IMPORTANT:
+-- - This is a NEW database project (separate from chatbot/RAG)
+-- - PDF-only (no video, no chatbot features)
+-- - Run this in your NEW Supabase project SQL Editor
 -- ===================================================================
 
 -- ===================================================================
@@ -20,11 +21,11 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "vector";
 
 -- ===================================================================
--- PART 1: SKILL ASSESSMENT TABLES
+-- CORE ASSESSMENT TABLES (7 Tables)
 -- ===================================================================
 
 -- ===================================================================
--- TABLE 1: Profiles
+-- TABLE 1: profiles
 -- ===================================================================
 -- User profiles linked to Supabase Auth
 -- ===================================================================
@@ -38,13 +39,13 @@ CREATE TABLE IF NOT EXISTS profiles (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-COMMENT ON TABLE profiles IS 'User profiles for Skill Assessment system';
+COMMENT ON TABLE profiles IS 'User profiles for Assessment system';
 
 CREATE INDEX IF NOT EXISTS idx_profiles_email ON profiles(email);
 CREATE INDEX IF NOT EXISTS idx_profiles_role ON profiles(role);
 
 -- ===================================================================
--- TABLE 2: Courses
+-- TABLE 2: courses
 -- ===================================================================
 -- Course definitions for grouping assessments
 -- ===================================================================
@@ -58,24 +59,10 @@ CREATE TABLE IF NOT EXISTS courses (
 
 COMMENT ON TABLE courses IS 'Course definitions for grouping assessments';
 
--- Ensure UNIQUE constraint exists on name column (for existing tables)
-DO $$ 
-BEGIN
-    -- Check if unique constraint exists
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint 
-        WHERE conname = 'courses_name_key' 
-        AND conrelid = 'courses'::regclass
-    ) THEN
-        -- Add unique constraint if it doesn't exist
-        ALTER TABLE courses ADD CONSTRAINT courses_name_key UNIQUE (name);
-    END IF;
-END $$;
-
 CREATE INDEX IF NOT EXISTS idx_courses_name ON courses(name);
 
 -- ===================================================================
--- TABLE 3: Assessments
+-- TABLE 3: assessments
 -- ===================================================================
 -- Assessment definitions and configurations
 -- ===================================================================
@@ -84,13 +71,13 @@ CREATE TABLE IF NOT EXISTS assessments (
     title TEXT NOT NULL,
     description TEXT,
     skill_domain TEXT NOT NULL,
-    course_id UUID REFERENCES courses(id) ON DELETE SET NULL,
     difficulty TEXT DEFAULT 'medium' CHECK (difficulty IN ('easy', 'medium', 'hard')),
     question_count INTEGER DEFAULT 10 CHECK (question_count > 0),
     duration_minutes INTEGER DEFAULT 60 CHECK (duration_minutes > 0),
     passing_score INTEGER DEFAULT 60 CHECK (passing_score >= 0 AND passing_score <= 100),
     status TEXT DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'archived')),
-    blueprint TEXT,
+    blueprint JSONB, -- Stores assessment configuration and PDF reference
+    course_id UUID REFERENCES courses(id) ON DELETE SET NULL,
     created_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -99,28 +86,36 @@ CREATE TABLE IF NOT EXISTS assessments (
 
 COMMENT ON TABLE assessments IS 'Assessment definitions for Skill Assessment';
 
--- Add course_id column if it doesn't exist (for existing tables)
-DO $$ 
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'assessments' 
-        AND column_name = 'course_id'
-    ) THEN
-        ALTER TABLE assessments 
-        ADD COLUMN course_id UUID REFERENCES courses(id) ON DELETE SET NULL;
-        
-        COMMENT ON COLUMN assessments.course_id IS 'Foreign key to courses table for course-based grouping';
-    END IF;
-END $$;
-
 CREATE INDEX IF NOT EXISTS idx_assessments_skill_domain ON assessments(skill_domain);
 CREATE INDEX IF NOT EXISTS idx_assessments_course_id ON assessments(course_id);
 CREATE INDEX IF NOT EXISTS idx_assessments_status ON assessments(status);
 CREATE INDEX IF NOT EXISTS idx_assessments_created_by ON assessments(created_by);
 
 -- ===================================================================
--- TABLE 4: Attempts
+-- TABLE 4: skill_assessment_questions
+-- ===================================================================
+-- Questions generated from PDF embeddings
+-- ===================================================================
+CREATE TABLE IF NOT EXISTS skill_assessment_questions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    assessment_id UUID REFERENCES assessments(id) ON DELETE CASCADE,
+    topic TEXT NOT NULL,
+    question TEXT NOT NULL,
+    options JSONB NOT NULL, -- Array of options for MCQ questions
+    correct_answer TEXT NOT NULL,
+    explanation TEXT,
+    difficulty TEXT DEFAULT 'medium' CHECK (difficulty IN ('easy', 'medium', 'hard')),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+COMMENT ON TABLE skill_assessment_questions IS 'Stores questions generated from PDF embeddings';
+
+CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_assessment_id ON skill_assessment_questions(assessment_id);
+CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_topic ON skill_assessment_questions(topic);
+CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_difficulty ON skill_assessment_questions(difficulty);
+
+-- ===================================================================
+-- TABLE 5: attempts
 -- ===================================================================
 -- User attempts for assessments
 -- ===================================================================
@@ -149,46 +144,7 @@ CREATE INDEX IF NOT EXISTS idx_attempts_status ON attempts(status);
 CREATE INDEX IF NOT EXISTS idx_attempts_created_at ON attempts(created_at);
 
 -- ===================================================================
--- TABLE 5: Skill Assessment Questions
--- ===================================================================
--- Questions generated from video and PDF embeddings
--- ===================================================================
-CREATE TABLE IF NOT EXISTS skill_assessment_questions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    topic TEXT NOT NULL,
-    question TEXT NOT NULL,
-    options JSONB NOT NULL, -- Array of options for MCQ questions
-    correct_answer TEXT NOT NULL,
-    source_type TEXT CHECK (source_type IN ('pdf', 'video', 'both')),
-    source_id TEXT, -- Video ID or document ID if applicable
-    explanation TEXT, -- Optional explanation for the answer
-    difficulty TEXT DEFAULT 'medium' CHECK (difficulty IN ('easy', 'medium', 'hard')),
-    assessment_id UUID REFERENCES assessments(id) ON DELETE CASCADE, -- Links question to assessment
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-COMMENT ON TABLE skill_assessment_questions IS 'Stores questions generated from existing video and PDF embeddings';
-
--- Add assessment_id column if it doesn't exist (for existing tables)
-DO $$ 
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'skill_assessment_questions' 
-        AND column_name = 'assessment_id'
-    ) THEN
-        ALTER TABLE skill_assessment_questions 
-        ADD COLUMN assessment_id UUID REFERENCES assessments(id) ON DELETE CASCADE;
-    END IF;
-END $$;
-
-CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_topic ON skill_assessment_questions(topic);
-CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_source_type ON skill_assessment_questions(source_type);
-CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_assessment_id ON skill_assessment_questions(assessment_id);
-CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_created_at ON skill_assessment_questions(created_at);
-
--- ===================================================================
--- TABLE 6: Responses
+-- TABLE 6: responses
 -- ===================================================================
 -- Individual question responses in an attempt
 -- ===================================================================
@@ -216,7 +172,7 @@ CREATE INDEX IF NOT EXISTS idx_responses_question_id ON responses(question_id);
 CREATE INDEX IF NOT EXISTS idx_responses_status ON responses(status);
 
 -- ===================================================================
--- TABLE 7: Results
+-- TABLE 7: results
 -- ===================================================================
 -- Final assessment results
 -- ===================================================================
@@ -247,56 +203,85 @@ CREATE INDEX IF NOT EXISTS idx_results_assessment_id ON results(assessment_id);
 CREATE INDEX IF NOT EXISTS idx_results_passed ON results(passed);
 
 -- ===================================================================
--- PART 2: RAG SYSTEM TABLES (Documentation Only)
--- ===================================================================
--- NOTE: These tables are assumed to already exist from the 
---       vimeo_video_chatbot project. If they don't exist, you'll
---       need to create them separately.
--- 
--- Expected RAG tables:
--- 
--- 1. video_embeddings
---    - id (UUID)
---    - video_id (TEXT)
---    - video_title (TEXT)
---    - video_url (TEXT)
---    - chunk_text (TEXT)
---    - embedding (vector)
---    - chunk_index (INTEGER)
---    - created_at (TIMESTAMP)
--- 
--- 2. pdf_embeddings
---    - id (UUID)
---    - pdf_id (TEXT)
---    - pdf_title (TEXT)
---    - pdf_url (TEXT)
---    - chunk_text (TEXT)
---    - embedding (vector)
---    - chunk_index (INTEGER)
---    - created_at (TIMESTAMP)
--- 
--- 3. chat_history
---    - id (UUID)
---    - user_id (UUID) - Optional, for user tracking
---    - query_text (TEXT)
---    - response_text (TEXT)
---    - source_type (TEXT) - 'video', 'pdf', 'both'
---    - source_ids (JSONB) - Array of source IDs used
---    - created_at (TIMESTAMP)
--- 
--- 4. user_queries
---    - id (UUID)
---    - user_id (UUID) - Optional
---    - query_text (TEXT)
---    - source_type (TEXT)
---    - created_at (TIMESTAMP)
--- 
--- If these tables don't exist, create them with appropriate schema
--- matching the structure expected by the RAG service.
+-- PDF / RAG TABLES (3 Tables)
 -- ===================================================================
 
 -- ===================================================================
--- PART 3: FUNCTIONS AND TRIGGERS
+-- TABLE 8: pdf_documents
+-- ===================================================================
+-- PDF file metadata and tracking
+-- ===================================================================
+CREATE TABLE IF NOT EXISTS pdf_documents (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    title TEXT NOT NULL,
+    file_url TEXT NOT NULL, -- Supabase Storage URL
+    file_size BIGINT, -- Size in bytes
+    upload_date TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    status TEXT DEFAULT 'uploaded' CHECK (status IN ('uploaded', 'processing', 'processed', 'error')),
+    error_message TEXT,
+    uploaded_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+COMMENT ON TABLE pdf_documents IS 'Tracks uploaded PDF files and their processing status';
+
+CREATE INDEX IF NOT EXISTS idx_pdf_documents_status ON pdf_documents(status);
+CREATE INDEX IF NOT EXISTS idx_pdf_documents_uploaded_by ON pdf_documents(uploaded_by);
+CREATE INDEX IF NOT EXISTS idx_pdf_documents_upload_date ON pdf_documents(upload_date);
+
+-- ===================================================================
+-- TABLE 9: pdf_embeddings
+-- ===================================================================
+-- PDF content chunks with vector embeddings
+-- ===================================================================
+CREATE TABLE IF NOT EXISTS pdf_embeddings (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    pdf_id UUID NOT NULL REFERENCES pdf_documents(id) ON DELETE CASCADE,
+    pdf_title TEXT NOT NULL,
+    chunk_text TEXT NOT NULL,
+    embedding vector(1536), -- OpenAI text-embedding-3-small dimension
+    chunk_index INTEGER NOT NULL,
+    page_number INTEGER,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+COMMENT ON TABLE pdf_embeddings IS 'Stores PDF text chunks with vector embeddings for RAG';
+
+CREATE INDEX IF NOT EXISTS idx_pdf_embeddings_pdf_id ON pdf_embeddings(pdf_id);
+CREATE INDEX IF NOT EXISTS idx_pdf_embeddings_pdf_title ON pdf_embeddings(pdf_title);
+CREATE INDEX IF NOT EXISTS idx_pdf_embeddings_chunk_index ON pdf_embeddings(pdf_id, chunk_index);
+
+-- Create vector similarity search index
+CREATE INDEX IF NOT EXISTS idx_pdf_embeddings_embedding ON pdf_embeddings 
+USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 100);
+
+-- ===================================================================
+-- TABLE 10: pdf_processing_log
+-- ===================================================================
+-- Monitor PDF processing pipeline
+-- ===================================================================
+CREATE TABLE IF NOT EXISTS pdf_processing_log (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    pdf_id UUID NOT NULL REFERENCES pdf_documents(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('uploaded', 'extracting', 'chunking', 'embedding', 'generating_questions', 'completed', 'error')),
+    error_message TEXT,
+    chunks_created INTEGER DEFAULT 0,
+    questions_generated INTEGER DEFAULT 0,
+    assessments_created INTEGER DEFAULT 0,
+    processing_started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    processing_completed_at TIMESTAMP WITH TIME ZONE,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+COMMENT ON TABLE pdf_processing_log IS 'Tracks PDF processing pipeline status';
+
+CREATE INDEX IF NOT EXISTS idx_pdf_processing_log_pdf_id ON pdf_processing_log(pdf_id);
+CREATE INDEX IF NOT EXISTS idx_pdf_processing_log_status ON pdf_processing_log(status);
+
+-- ===================================================================
+-- FUNCTIONS AND TRIGGERS
 -- ===================================================================
 
 -- ===================================================================
@@ -316,6 +301,12 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS update_profiles_updated_at ON profiles;
 CREATE TRIGGER update_profiles_updated_at
     BEFORE UPDATE ON profiles
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_courses_updated_at ON courses;
+CREATE TRIGGER update_courses_updated_at
+    BEFORE UPDATE ON courses
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
@@ -343,21 +334,62 @@ CREATE TRIGGER update_results_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
-DROP TRIGGER IF EXISTS update_courses_updated_at ON courses;
-CREATE TRIGGER update_courses_updated_at
-    BEFORE UPDATE ON courses
+DROP TRIGGER IF EXISTS update_pdf_documents_updated_at ON pdf_documents;
+CREATE TRIGGER update_pdf_documents_updated_at
+    BEFORE UPDATE ON pdf_documents
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_pdf_processing_log_updated_at ON pdf_processing_log;
+CREATE TRIGGER update_pdf_processing_log_updated_at
+    BEFORE UPDATE ON pdf_processing_log
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
 -- ===================================================================
--- PART 4: DEFAULT DATA AND MIGRATIONS
+-- VECTOR SIMILARITY SEARCH FUNCTION
 -- ===================================================================
+CREATE OR REPLACE FUNCTION match_pdf_embeddings(
+    query_embedding vector(1536),
+    match_threshold float DEFAULT 0.7,
+    match_count int DEFAULT 10,
+    filter_pdf_id uuid DEFAULT NULL
+)
+RETURNS TABLE (
+    id uuid,
+    pdf_id uuid,
+    pdf_title text,
+    chunk_text text,
+    chunk_index integer,
+    page_number integer,
+    similarity float
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        pdf_embeddings.id,
+        pdf_embeddings.pdf_id,
+        pdf_embeddings.pdf_title,
+        pdf_embeddings.chunk_text,
+        pdf_embeddings.chunk_index,
+        pdf_embeddings.page_number,
+        1 - (pdf_embeddings.embedding <=> query_embedding) AS similarity
+    FROM pdf_embeddings
+    WHERE 
+        (filter_pdf_id IS NULL OR pdf_embeddings.pdf_id = filter_pdf_id)
+        AND 1 - (pdf_embeddings.embedding <=> query_embedding) > match_threshold
+    ORDER BY pdf_embeddings.embedding <=> query_embedding
+    LIMIT match_count;
+END;
+$$;
 
 -- ===================================================================
--- INSERT DEFAULT COURSES
+-- DEFAULT DATA
 -- ===================================================================
--- Insert default courses if they don't exist
--- Use a safer approach that works even if UNIQUE constraint doesn't exist
+
+-- Insert default courses
 INSERT INTO courses (name, description) 
 SELECT 'Python', 'Python programming language assessments'
 WHERE NOT EXISTS (SELECT 1 FROM courses WHERE name = 'Python');
@@ -367,38 +399,11 @@ SELECT 'DevOps', 'DevOps tools and practices assessments'
 WHERE NOT EXISTS (SELECT 1 FROM courses WHERE name = 'DevOps');
 
 -- ===================================================================
--- MIGRATION: Update existing assessments to have course_id
--- ===================================================================
--- This will set course_id for existing assessments based on skill_domain
--- Run this after initial schema creation if you have existing assessments
-
--- Update Python assessments
-UPDATE assessments 
-SET course_id = (SELECT id FROM courses WHERE name = 'Python' LIMIT 1)
-WHERE skill_domain ILIKE '%python%' 
-  AND course_id IS NULL;
-
--- Update DevOps assessments
-UPDATE assessments 
-SET course_id = (SELECT id FROM courses WHERE name = 'DevOps' LIMIT 1)
-WHERE (skill_domain ILIKE '%devops%' 
-    OR skill_domain ILIKE '%docker%'
-    OR skill_domain ILIKE '%kubernetes%'
-    OR skill_domain ILIKE '%linux%'
-    OR skill_domain ILIKE '%sonarqube%'
-    OR title ILIKE '%devops%'
-    OR title ILIKE '%docker%'
-    OR title ILIKE '%kubernetes%'
-    OR title ILIKE '%linux%'
-    OR title ILIKE '%sonarqube%')
-  AND course_id IS NULL;
-
--- ===================================================================
 -- VERIFICATION QUERIES
 -- ===================================================================
 -- Run these after executing the schema to verify everything was created:
 
--- Check all Skill Assessment tables exist
+-- Check all tables exist
 -- SELECT table_name 
 -- FROM information_schema.tables 
 -- WHERE table_schema = 'public' 
@@ -406,52 +411,23 @@ WHERE (skill_domain ILIKE '%devops%'
 --         'profiles',
 --         'courses',
 --         'assessments', 
+--         'skill_assessment_questions',
 --         'attempts', 
 --         'responses', 
---         'results', 
---         'skill_assessment_questions'
+--         'results',
+--         'pdf_documents',
+--         'pdf_embeddings',
+--         'pdf_processing_log'
 --     )
 -- ORDER BY table_name;
 
--- Check courses table
+-- Check courses
 -- SELECT * FROM courses;
 
--- Check assessments with course_id
--- SELECT id, title, skill_domain, course_id, 
---        (SELECT name FROM courses WHERE id = assessments.course_id) as course_name
--- FROM assessments 
--- LIMIT 10;
+-- Check vector extension
+-- SELECT * FROM pg_extension WHERE extname = 'vector';
 
--- Count assessments per course
--- SELECT c.name, COUNT(a.id) as assessment_count
--- FROM courses c
--- LEFT JOIN assessments a ON a.course_id = c.id
--- GROUP BY c.name
--- ORDER BY assessment_count DESC;
-
--- Check foreign key constraints
--- SELECT
---     tc.table_name, 
---     kcu.column_name, 
---     ccu.table_name AS foreign_table_name
--- FROM information_schema.table_constraints AS tc 
--- JOIN information_schema.key_column_usage AS kcu
---     ON tc.constraint_name = kcu.constraint_name
--- JOIN information_schema.constraint_column_usage AS ccu
---     ON ccu.constraint_name = tc.constraint_name
--- WHERE tc.constraint_type = 'FOREIGN KEY'
---     AND tc.table_schema = 'public'
--- ORDER BY tc.table_name;
-
--- Check RAG tables exist (if applicable)
--- SELECT table_name 
--- FROM information_schema.tables 
--- WHERE table_schema = 'public' 
---     AND table_name IN (
---         'video_embeddings', 
---         'pdf_embeddings', 
---         'chat_history', 
---         'user_queries'
---     )
--- ORDER BY table_name;
+-- Check vector similarity function
+-- SELECT routine_name FROM information_schema.routines 
+-- WHERE routine_schema = 'public' AND routine_name = 'match_pdf_embeddings';
 

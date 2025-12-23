@@ -1,6 +1,6 @@
 """
 Service for automatically generating assessments from existing embeddings
-Reads video_embeddings and pdf_embeddings, generates questions, and creates assessments
+Reads pdf_embeddings, generates questions, and creates assessments
 """
 
 from typing import List, Dict, Any, Optional
@@ -31,44 +31,6 @@ class AssessmentGenerator:
             logger.warning("Service key client not available, falling back to anon key")
             logger.warning("Admin operations (creating assessments) may fail due to RLS")
             self.client = supabase_service.get_client(use_service_key=False)
-    
-    def get_all_video_sources(self) -> List[Dict[str, Any]]:
-        """
-        Get all unique video sources from video_embeddings table
-        
-        Returns:
-            List of unique video sources with metadata
-        """
-        try:
-            if not self.client:
-                logger.error("Supabase client not available")
-                return []
-            
-            # Get distinct video IDs and titles
-            response = self.client.table("video_embeddings")\
-                .select("video_id, video_title")\
-                .execute()
-            
-            if not response.data:
-                return []
-            
-            # Get unique video sources
-            unique_videos = {}
-            for row in response.data:
-                video_id = row.get("video_id")
-                if video_id and video_id not in unique_videos:
-                    unique_videos[video_id] = {
-                        "video_id": video_id,
-                        "video_title": row.get("video_title", f"Video {video_id}"),
-                        "source_type": "video"
-                    }
-            
-            logger.info(f"Found {len(unique_videos)} unique video sources")
-            return list(unique_videos.values())
-            
-        except Exception as e:
-            logger.error(f"Error getting video sources: {str(e)}")
-            return []
     
     def get_all_pdf_sources(self) -> List[Dict[str, Any]]:
         """
@@ -115,13 +77,12 @@ class AssessmentGenerator:
             logger.error(f"Error getting PDF sources: {str(e)}")
             return []
     
-    def get_chunks_for_source(self, source_id: str, source_type: str, limit: int = 20) -> List[Dict[str, Any]]:
+    def get_chunks_for_source(self, pdf_id: str, limit: int = 20) -> List[Dict[str, Any]]:
         """
-        Get text chunks for a specific video or PDF source
+        Get text chunks for a specific PDF source
         
         Args:
-            source_id: Video ID or document ID
-            source_type: 'video' or 'pdf'
+            pdf_id: PDF document ID
             limit: Maximum number of chunks to retrieve
         
         Returns:
@@ -131,46 +92,27 @@ class AssessmentGenerator:
             if not self.client:
                 return []
             
-            if source_type == "video":
-                # Note: Actual column name is 'content' not 'chunk_text'
-                response = self.client.table("video_embeddings")\
-                    .select("id, content, chunk_id, video_title")\
-                    .eq("video_id", source_id)\
-                    .limit(limit)\
-                    .execute()
-                
-                chunks = []
-                for row in response.data or []:
-                    chunks.append({
-                        "chunk_text": row.get("content", ""),  # Map 'content' to 'chunk_text' for compatibility
-                        "source_type": "video",
-                        "source_id": source_id,
-                        "source_name": row.get("video_title", source_id)
-                    })
-                return chunks
+            # OPTIMIZATION: Use correct column names from schema
+            # Schema uses: chunk_text, chunk_index (not content, chunk_id)
+            response = self.client.table("pdf_embeddings")\
+                .select("id, chunk_text, chunk_index, pdf_title, page_number")\
+                .eq("pdf_id", pdf_id)\
+                .order("chunk_index")\
+                .limit(limit)\
+                .execute()
             
-            elif source_type == "pdf":
-                # Note: Actual column names are 'content', 'pdf_id', 'pdf_title' (not chunk_text, document_id, document_name)
-                response = self.client.table("pdf_embeddings")\
-                    .select("id, content, chunk_id, pdf_title, page_number")\
-                    .eq("pdf_id", source_id)\
-                    .limit(limit)\
-                    .execute()
-                
-                chunks = []
-                for row in response.data or []:
-                    chunks.append({
-                        "chunk_text": row.get("content", ""),  # Map 'content' to 'chunk_text' for compatibility
-                        "source_type": "pdf",
-                        "source_id": source_id,
-                        "source_name": row.get("pdf_title", source_id)
-                    })
-                return chunks
-            
-            return []
+            chunks = []
+            for row in response.data or []:
+                chunks.append({
+                    "chunk_text": row.get("chunk_text", ""),  # Use correct column name
+                    "source_type": "pdf",
+                    "source_id": pdf_id,
+                    "source_name": row.get("pdf_title", pdf_id)
+                })
+            return chunks
             
         except Exception as e:
-            logger.error(f"Error getting chunks for source {source_id}: {str(e)}")
+            logger.error(f"Error getting chunks for PDF {pdf_id}: {str(e)}")
             return []
     
     def determine_difficulty_from_chunks(self, chunks: List[Dict[str, Any]]) -> str:
@@ -207,58 +149,25 @@ class AssessmentGenerator:
         else:
             return "medium"
     
-    def extract_topic_from_source(self, source_name: str, source_type: str) -> str:
+    def extract_topic_from_source(self, source_name: str) -> str:
         """
-        Extract topic/skill domain from source name
+        Extract topic/skill domain from PDF source name
         
-        For PDFs: Use the full PDF title to ensure each PDF gets its own unique course
-        For Videos: Use keyword matching or first word
+        Uses the full PDF title to ensure each PDF gets its own unique course
         
         Args:
-            source_name: Video title or document name
-            source_type: 'video' or 'pdf'
+            source_name: PDF document name
         
         Returns:
             Extracted topic/skill domain
         """
-        # For PDFs, use the full title to ensure uniqueness (one PDF = one course)
-        if source_type == "pdf":
-            # Use full PDF title as skill_domain to ensure each PDF is unique
-            # Clean up the title but keep it unique
-            cleaned_title = source_name.strip()
-            # Remove common prefixes/suffixes but keep the unique part
-            if cleaned_title:
-                return cleaned_title
-            return f"PDF {source_name[:30]}" if source_name else "General PDF"
-        
-        # For videos, use keyword matching (original logic)
-        skill_keywords = {
-            "react": "React",
-            "javascript": "JavaScript",
-            "typescript": "TypeScript",
-            "python": "Python",
-            "java": "Java",
-            "problem": "Problem Solving",
-            "communication": "Communication",
-            "teamwork": "Teamwork",
-            "collaboration": "Communication & Collaboration"
-        }
-        
-        source_lower = source_name.lower()
-        
-        # Try to match keywords
-        for keyword, skill in skill_keywords.items():
-            if keyword in source_lower:
-                return skill
-        
-        # Fallback: extract from title or use generic
-        if " " in source_name:
-            # Use first significant word
-            words = source_name.split()
-            if len(words) > 0:
-                return words[0].title()
-        
-        return source_name[:30] if source_name else "General"
+        # Use full PDF title as skill_domain to ensure each PDF is unique
+        # Clean up the title but keep it unique
+        cleaned_title = source_name.strip()
+        # Remove common prefixes/suffixes but keep the unique part
+        if cleaned_title:
+            return cleaned_title
+        return f"PDF {source_name[:30]}" if source_name else "General PDF"
     
     def generate_questions_from_chunks(
         self,
@@ -364,11 +273,11 @@ class AssessmentGenerator:
                     if response.data:
                         batch_ids = [q.get('id') for q in response.data]
                         inserted_ids.extend(batch_ids)
-                        logger.info(f"✅ Successfully inserted {len(batch_ids)} questions. IDs: {batch_ids[:3]}...")
+                        logger.info(f"[OK] Successfully inserted {len(batch_ids)} questions. IDs: {batch_ids[:3]}...")
                     else:
-                        logger.warning(f"⚠️  Insert response has no data for batch {i//batch_size + 1}")
+                        logger.warning(f"[WARN] Insert response has no data for batch {i//batch_size + 1}")
                 except Exception as e:
-                    logger.error(f"❌ Error inserting questions batch {i//batch_size + 1}: {str(e)}")
+                    logger.error(f"[FAILED] Error inserting questions batch {i//batch_size + 1}: {str(e)}")
                     import traceback
                     logger.error(traceback.format_exc())
             
@@ -389,80 +298,93 @@ class AssessmentGenerator:
     
     def generate_questions_for_source(
         self,
-        source_id: str,
-        source_name: str,
-        source_type: str,
+        pdf_id: str,
+        pdf_name: str,
         num_questions: int = 10
     ) -> Dict[str, Any]:
         """
-        Generate questions for a specific video or PDF source
+        Generate questions for a specific PDF source
         
         Args:
-            source_id: Video ID or document ID
-            source_name: Video title or document name
-            source_type: 'video' or 'pdf'
+            pdf_id: PDF document ID
+            pdf_name: PDF document name
             num_questions: Number of questions to generate (default 10)
         
         Returns:
             Dictionary with success status and generated questions
         """
         try:
-            # Get chunks for this source
-            chunks = self.get_chunks_for_source(source_id, source_type, limit=30)
+            # Get chunks for this PDF
+            chunks = self.get_chunks_for_source(pdf_id, limit=30)
             
             if not chunks:
-                logger.warning(f"No chunks found for {source_type} {source_id}")
+                logger.warning(f"No chunks found for PDF {pdf_id}")
                 return {
                     "success": False,
-                    "error": f"No content found for {source_name}"
+                    "error": f"No content found for {pdf_name}"
                 }
             
-            # Extract topic from source name
-            topic = self.extract_topic_from_source(source_name, source_type)
+            # Extract topic from PDF name
+            topic = self.extract_topic_from_source(pdf_name)
             
             # Determine difficulty
             difficulty = self.determine_difficulty_from_chunks(chunks)
             
             # Generate questions with mixed difficulty levels
-            # Generate 3 easy, 4 medium, 3 hard questions
-            easy_count = num_questions // 3
-            medium_count = (num_questions * 2) // 3
-            hard_count = num_questions - easy_count - medium_count
-            
+            # Ensure at least 5 coding questions total
+            num_questions = max(num_questions, 5)  # Ensure minimum 5 questions
+
+            easy_count = max(1, num_questions // 3)  # At least 1 easy
+            medium_count = max(2, (num_questions * 2) // 3)  # At least 2 medium
+            hard_count = max(2, num_questions - easy_count - medium_count)  # At least 2 hard
+
             all_questions = []
-            
-            # Generate easy questions
+
+            # Generate easy coding questions
             if easy_count > 0:
                 easy_questions = topic_question_service.generate_questions_from_embeddings(
                     topic=topic,
-                    chunks=chunks[:10],  # Use simpler chunks
+                    chunks=chunks[:10],
                     num_questions=easy_count,
                     question_type="mcq",
                     difficulty="easy"
                 )
                 all_questions.extend(easy_questions)
-            
-            # Generate medium questions
+
+            # Generate medium coding questions
             if medium_count > 0:
                 medium_questions = topic_question_service.generate_questions_from_embeddings(
                     topic=topic,
-                    chunks=chunks[:20],  # Use more chunks
+                    chunks=chunks[:20],
                     num_questions=medium_count,
                     question_type="mcq",
                     difficulty="medium"
                 )
                 all_questions.extend(medium_questions)
-            
-            # Generate hard questions
+
+            # Generate hard coding questions
             if hard_count > 0:
                 hard_questions = topic_question_service.generate_questions_from_embeddings(
                     topic=topic,
-                    chunks=chunks,  # Use all chunks
+                    chunks=chunks,
                     num_questions=hard_count,
                     question_type="mcq",
                     difficulty="hard"
                 )
                 all_questions.extend(hard_questions)
+
+            # Ensure we have at least 5 questions
+            if len(all_questions) < 5:
+                # Generate additional questions to reach minimum
+                additional_needed = 5 - len(all_questions)
+                additional_questions = topic_question_service.generate_questions_from_embeddings(
+                    topic=topic,
+                    chunks=chunks,
+                    num_questions=additional_needed,
+                    question_type="mcq",
+                    difficulty="medium"
+                )
+                all_questions.extend(additional_questions)
             
             if not all_questions:
                 return {
@@ -503,11 +425,11 @@ class AssessmentGenerator:
                     if response.data:
                         batch_ids = [q.get('id') for q in response.data]
                         inserted_ids.extend(batch_ids)
-                        logger.info(f"✅ Successfully inserted {len(batch_ids)} questions. IDs: {batch_ids[:3]}...")
+                        logger.info(f"[OK] Successfully inserted {len(batch_ids)} questions. IDs: {batch_ids[:3]}...")
                     else:
-                        logger.warning(f"⚠️  Insert response has no data for batch {i//batch_size + 1}")
+                        logger.warning(f"[WARN] Insert response has no data for batch {i//batch_size + 1}")
                 except Exception as e:
-                    logger.error(f"❌ Error inserting questions batch {i//batch_size + 1}: {str(e)}")
+                    logger.error(f"[FAILED] Error inserting questions batch {i//batch_size + 1}: {str(e)}")
                     import traceback
                     logger.error(traceback.format_exc())
             
@@ -528,15 +450,15 @@ class AssessmentGenerator:
             return {
                 "success": True,
                 "topic": topic,
-                "source_name": source_name,
-                "source_type": source_type,
+                "source_name": pdf_name,
+                "source_type": "pdf",
                 "questions": all_questions,
                 "question_ids": store_result.get("question_ids", []),
                 "difficulty": difficulty
             }
             
         except Exception as e:
-            logger.error(f"Error generating questions for source {source_id}: {str(e)}")
+            logger.error(f"Error generating questions for PDF {pdf_id}: {str(e)}")
             return {
                 "success": False,
                 "error": str(e)
@@ -548,17 +470,21 @@ class AssessmentGenerator:
         source_name: str,
         question_ids: List[str],
         difficulty: str,
-        question_count: int
+        question_count: int,
+        course_id: Optional[str] = None,
+        assessment_title: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Create an assessment entry in the assessments table
         
         Args:
             topic: Skill domain/topic
-            source_name: Original source name (video title or document name)
+            source_name: Original PDF document name
             question_ids: List of question UUIDs
             difficulty: Average difficulty level
             question_count: Total number of questions
+            course_id: Optional course ID to link assessment
+            assessment_title: Optional custom assessment title (defaults to source_name)
         
         Returns:
             Created assessment record or None
@@ -577,6 +503,9 @@ class AssessmentGenerator:
             # Calculate duration (1.5 minutes per question)
             duration_minutes = int(question_count * 1.5)
             
+            # Use custom title if provided, otherwise use source_name
+            title = assessment_title or source_name
+            
             # Create description
             description = f"Assessment based on {source_name}. Test your knowledge with {question_count} multiple-choice questions."
             
@@ -593,7 +522,7 @@ class AssessmentGenerator:
             
             # Create assessment record
             assessment_data = {
-                "title": f"{topic} Assessment",
+                "title": title,
                 "description": description,
                 "skill_domain": topic,
                 "difficulty": difficulty,
@@ -605,6 +534,10 @@ class AssessmentGenerator:
                 "created_by": None,  # System-generated assessment
                 "published_at": datetime.utcnow().isoformat()
             }
+            
+            # Add course_id if provided
+            if course_id:
+                assessment_data["course_id"] = course_id
             
             logger.info(f"Inserting assessment: {assessment_data.get('title')}")
             response = self.client.table("assessments").insert(assessment_data).execute()
@@ -629,11 +562,11 @@ class AssessmentGenerator:
     
     def generate_all_assessments(self) -> Dict[str, Any]:
         """
-        Generate assessments from all existing embeddings
+        Generate assessments from all existing PDF embeddings
         
         This function:
-        1. Reads all video and PDF sources
-        2. Generates questions for each source
+        1. Reads all PDF sources
+        2. Generates questions for each PDF
         3. Creates assessment entries
         4. Stores everything in Supabase
         
@@ -641,48 +574,43 @@ class AssessmentGenerator:
             Dictionary with generation results
         """
         try:
-            logger.info("Starting assessment generation from existing embeddings")
+            logger.info("Starting assessment generation from existing PDF embeddings")
             
-            # Get all sources
-            video_sources = self.get_all_video_sources()
+            # Get all PDF sources
             pdf_sources = self.get_all_pdf_sources()
             
-            all_sources = video_sources + pdf_sources
-            
-            if not all_sources:
-                logger.warning("No video or PDF sources found in database")
+            if not pdf_sources:
+                logger.warning("No PDF sources found in database")
                 return {
                     "success": False,
-                    "error": "No sources found in database",
+                    "error": "No PDF sources found in database",
                     "generated": 0
                 }
             
-            logger.info(f"Found {len(all_sources)} total sources ({len(video_sources)} videos, {len(pdf_sources)} PDFs)")
+            logger.info(f"Found {len(pdf_sources)} PDF sources")
             
             generated_assessments = []
             failed_sources = []
             
-            # Process each source
-            for source in all_sources:
+            # Process each PDF source
+            for source in pdf_sources:
                 # Handle both old and new column names
-                source_id = source.get("video_id") or source.get("document_id") or source.get("pdf_id")
-                source_name = source.get("video_title") or source.get("document_name") or source.get("pdf_title", "Unknown")
-                source_type = source.get("source_type", "unknown")
+                pdf_id = source.get("document_id") or source.get("pdf_id")
+                pdf_name = source.get("document_name") or source.get("pdf_title", "Unknown")
                 
-                logger.info(f"Processing {source_type}: {source_name} (ID: {source_id})")
+                logger.info(f"Processing PDF: {pdf_name} (ID: {pdf_id})")
                 
                 # Generate questions
                 result = self.generate_questions_for_source(
-                    source_id=source_id,
-                    source_name=source_name,
-                    source_type=source_type,
+                    pdf_id=pdf_id,
+                    pdf_name=pdf_name,
                     num_questions=10
                 )
                 
                 if not result.get("success"):
-                    logger.warning(f"Failed to generate questions for {source_name}: {result.get('error')}")
+                    logger.warning(f"Failed to generate questions for {pdf_name}: {result.get('error')}")
                     failed_sources.append({
-                        "source": source_name,
+                        "source": pdf_name,
                         "error": result.get("error")
                     })
                     continue
@@ -693,9 +621,9 @@ class AssessmentGenerator:
                 question_count = len(result.get("questions", []))
                 
                 if not question_ids or question_count == 0:
-                    logger.warning(f"No questions stored for {source_name}")
+                    logger.warning(f"No questions stored for {pdf_name}")
                     failed_sources.append({
-                        "source": source_name,
+                        "source": pdf_name,
                         "error": "Questions generated but not stored"
                     })
                     continue
@@ -703,7 +631,7 @@ class AssessmentGenerator:
                 # Create assessment
                 assessment = self.create_assessment_from_questions(
                     topic=topic,
-                    source_name=source_name,
+                    source_name=pdf_name,
                     question_ids=question_ids,
                     difficulty=difficulty,
                     question_count=question_count
@@ -714,20 +642,20 @@ class AssessmentGenerator:
                         "assessment_id": assessment.get("id"),
                         "title": assessment.get("title"),
                         "topic": topic,
-                        "source": source_name,
+                        "source": pdf_name,
                         "question_count": question_count
                     })
-                    logger.info(f"✅ Created assessment: {assessment.get('title')}")
+                    logger.info(f"[OK] Created assessment: {assessment.get('title')}")
                 else:
-                    logger.warning(f"Failed to create assessment for {source_name}")
+                    logger.warning(f"Failed to create assessment for {pdf_name}")
                     failed_sources.append({
-                        "source": source_name,
+                        "source": pdf_name,
                         "error": "Assessment creation failed"
                     })
             
             return {
                 "success": True,
-                "total_sources": len(all_sources),
+                "total_sources": len(pdf_sources),
                 "generated": len(generated_assessments),
                 "failed": len(failed_sources),
                 "assessments": generated_assessments,

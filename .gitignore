@@ -126,3 +126,7 @@ logs/
 tmp/
 temp/
 
+# Uploaded PDFs (course folders)
+app/uploads/
+uploads/
+
