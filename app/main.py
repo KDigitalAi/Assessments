@@ -134,7 +134,8 @@ EDIFY_FRONTEND_ORIGINS = [
     "https://app.edify.com",  # If Edify uses app subdomain
     "http://localhost:3000",  # Local development
     "http://localhost:5173",  # Vite dev server
-    "http://localhost:8080",  # Common dev port
+    "http://localhost:8080",
+    "https://edify-enterprise-web-app-git-dev-tech-kdigitalais-projects.vercel.app/",  # Common dev port
 ]
 
 if debug_mode or is_localhost:
