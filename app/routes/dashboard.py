@@ -266,21 +266,36 @@ async def get_assessments_with_course_filter(
         # Filter by course_id if provided (matches frontend's query parameter)
         course_name = None
         if course_id:
-            query = query.eq("course_id", course_id)
-            logger.info(f"Filtering assessments by course_id: {course_id}")
-            
-            # Verify course exists
-            course_response = client.table("courses")\
-                .select("id, name")\
-                .eq("id", course_id)\
-                .limit(1)\
-                .execute()
-            
-            if course_response.data and len(course_response.data) > 0:
-                course_name = course_response.data[0].get("name", "Course")
-                logger.debug(f"Retrieved course: {course_name} (ID: {course_id})")
+            # Clean and validate course_id
+            course_id = course_id.strip() if course_id else None
+            if not course_id:
+                logger.warning("Empty course_id provided, returning all assessments")
             else:
-                logger.warning(f"Course not found: {course_id}")
+                # Add strict filtering: only assessments with this course_id
+                # Note: .eq() already excludes NULL values (NULL != course_id)
+                query = query.eq("course_id", course_id)
+                logger.info(f"Filtering assessments by course_id: {course_id}")
+                
+                # Verify course exists
+                course_response = client.table("courses")\
+                    .select("id, name")\
+                    .eq("id", course_id)\
+                    .limit(1)\
+                    .execute()
+                
+                if course_response.data and len(course_response.data) > 0:
+                    course_name = course_response.data[0].get("name", "Course")
+                    logger.debug(f"Retrieved course: {course_name} (ID: {course_id})")
+                else:
+                    logger.warning(f"Course not found: {course_id}")
+                    # Return empty list if course doesn't exist
+                    return {
+                        "success": True,
+                        "assessments": [],
+                        "total": 0,
+                        "course_name": None,
+                        "message": f"Course not found: {course_id}"
+                    }
         else:
             logger.info("Getting all published assessments (no course_id filter)")
         
@@ -289,6 +304,17 @@ async def get_assessments_with_course_filter(
         assessments = assessments_response.data if assessments_response.data else []
         
         logger.info(f"Retrieved {len(assessments)} assessment(s)" + (f" for course: {course_name} (ID: {course_id})" if course_id else ""))
+        
+        # DEBUG: Log course_ids of returned assessments when filtering
+        if course_id:
+            assessment_course_ids = [str(a.get("course_id", "NULL")) for a in assessments]
+            logger.debug(f"Assessment course_ids in response: {assessment_course_ids[:10]}")  # Log first 10
+            # Verify all assessments belong to the requested course
+            mismatched = [a for a in assessments if str(a.get("course_id")) != str(course_id)]
+            if mismatched:
+                logger.error(f"CRITICAL: Found {len(mismatched)} assessments with mismatched course_id!")
+                for m in mismatched[:5]:  # Log first 5 mismatches
+                    logger.error(f"  - Assessment ID: {m.get('id')}, Expected course_id: {course_id}, Got: {m.get('course_id')}")
         
         # Normalize domain name function (same as existing endpoint)
         def normalize_domain(raw_name: str) -> str:
@@ -332,6 +358,13 @@ async def get_assessments_with_course_filter(
         seen_titles = {}
         
         for assessment in assessments:
+            # STRICT: When filtering by course_id, skip assessments that don't match
+            if course_id:
+                assessment_course_id = assessment.get("course_id")
+                if not assessment_course_id or str(assessment_course_id) != str(course_id):
+                    logger.warning(f"Skipping assessment {assessment.get('id')} - course_id mismatch: {assessment_course_id} != {course_id}")
+                    continue
+            
             raw_skill = assessment.get("skill_domain", "Unknown")
             normalized_skill = normalize_domain(raw_skill)
             
@@ -368,12 +401,14 @@ async def get_assessments_with_course_filter(
         if course_name:
             response_data["course_name"] = course_name
         
+        logger.info(f"Returning {len(formatted_assessments)} formatted assessment(s)" + (f" for course: {course_name}" if course_name else ""))
+        
         return response_data
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting assessments: {str(e)}")
+        logger.error(f"Error getting assessments: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error getting assessments: {str(e)}"
