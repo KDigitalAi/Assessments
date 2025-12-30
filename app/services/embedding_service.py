@@ -65,10 +65,15 @@ class EmbeddingService:
                 text = text[:max_chars]
                 logger.warning(f"Text truncated to {max_chars} characters for embedding")
             
+            logger.debug(f"Generating embedding for text (length: {len(text)} chars)")
             response = self.client.embeddings.create(
                 model=settings.OPENAI_EMBEDDING_MODEL,
                 input=text
             )
+            
+            if not response.data or len(response.data) == 0:
+                logger.error("OpenAI embedding API returned empty data")
+                return None
             
             return response.data[0].embedding
             

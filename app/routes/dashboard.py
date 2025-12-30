@@ -6,7 +6,7 @@ API-only backend service - Frontend handled by Edify team
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List, Optional, Dict, Any
 from uuid import UUID
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel, Field
 import json
 
@@ -47,7 +47,7 @@ async def get_assessments():
     try:
         client = supabase_service.get_client()
         if not client:
-            logger.error("❌ Supabase client not available in get_assessments endpoint")
+            logger.error("Supabase client not available in get_assessments endpoint")
             logger.error("   This usually means SUPABASE_URL or SUPABASE_KEY environment variables are missing or incorrect")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -61,13 +61,13 @@ async def get_assessments():
                 .execute()
             
             courses = courses_response.data if courses_response.data else []
-            logger.info(f"✅ Loaded {len(courses)} courses from database")
+            logger.info(f"Loaded {len(courses)} courses from database")
         except Exception as courses_error:
-            logger.error(f"❌ Error loading courses: {str(courses_error)}")
+            logger.error(f"Error loading courses: {str(courses_error)}")
             # Check if it's an RLS issue
             error_msg = str(courses_error).lower()
             if "row-level security" in error_msg or "permission denied" in error_msg or "new row violates row-level security" in error_msg:
-                logger.error("   ⚠️  This appears to be a Row Level Security (RLS) issue.")
+                logger.error("   This appears to be a Row Level Security (RLS) issue.")
                 logger.error("   SOLUTION: Ensure RLS policies allow SELECT on 'courses' table for anonymous users.")
             courses = []
         
@@ -79,13 +79,13 @@ async def get_assessments():
                 .execute()
             
             assessments = assessments_response.data if assessments_response.data else []
-            logger.info(f"✅ Loaded {len(assessments)} published assessments from database")
+            logger.info(f"Loaded {len(assessments)} published assessments from database")
         except Exception as assessments_error:
-            logger.error(f"❌ Error loading assessments: {str(assessments_error)}")
+            logger.error(f"Error loading assessments: {str(assessments_error)}")
             # Check if it's an RLS issue
             error_msg = str(assessments_error).lower()
             if "row-level security" in error_msg or "permission denied" in error_msg:
-                logger.error("   ⚠️  This appears to be a Row Level Security (RLS) issue.")
+                logger.error("   This appears to be a Row Level Security (RLS) issue.")
                 logger.error("   SOLUTION: Ensure RLS policies allow SELECT on 'assessments' table for anonymous users.")
             assessments = []
         
@@ -215,7 +215,7 @@ async def get_assessments():
         raise
     except Exception as e:
         error_msg = str(e).lower()
-        logger.error(f"❌ Error getting assessments: {str(e)}")
+        logger.error(f"Error getting assessments: {str(e)}")
         
         # Provide helpful error messages based on error type
         if "row-level security" in error_msg or "permission denied" in error_msg:
@@ -230,6 +230,153 @@ async def get_assessments():
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=detail
+        )
+
+
+@router.get("/assessments")
+async def get_assessments_with_course_filter(
+    course_id: Optional[str] = None  # Query parameter: ?course_id=...
+):
+    """
+    Get assessments - can filter by course_id if provided as query parameter
+    
+    This endpoint supports the frontend's existing API call pattern:
+    - /api/assessments?course_id=abc-123  → Returns assessments for that course
+    - /api/assessments                    → Returns all published assessments
+    
+    Args:
+        course_id: Optional course UUID as query parameter
+    
+    Returns:
+        List of assessments (filtered by course_id if provided)
+    """
+    try:
+        client = supabase_service.get_client()
+        if not client:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database service unavailable"
+            )
+        
+        # Start building query
+        query = client.table("assessments")\
+            .select("*")\
+            .eq("status", "published")
+        
+        # Filter by course_id if provided (matches frontend's query parameter)
+        course_name = None
+        if course_id:
+            query = query.eq("course_id", course_id)
+            logger.info(f"Filtering assessments by course_id: {course_id}")
+            
+            # Verify course exists
+            course_response = client.table("courses")\
+                .select("id, name")\
+                .eq("id", course_id)\
+                .limit(1)\
+                .execute()
+            
+            if course_response.data and len(course_response.data) > 0:
+                course_name = course_response.data[0].get("name", "Course")
+                logger.debug(f"Retrieved course: {course_name} (ID: {course_id})")
+            else:
+                logger.warning(f"Course not found: {course_id}")
+        else:
+            logger.info("Getting all published assessments (no course_id filter)")
+        
+        # Execute query
+        assessments_response = query.execute()
+        assessments = assessments_response.data if assessments_response.data else []
+        
+        logger.info(f"Retrieved {len(assessments)} assessment(s)" + (f" for course: {course_name} (ID: {course_id})" if course_id else ""))
+        
+        # Normalize domain name function (same as existing endpoint)
+        def normalize_domain(raw_name: str) -> str:
+            """Normalize course domain name."""
+            if not raw_name or not isinstance(raw_name, str):
+                return "General"
+            name = raw_name.strip().lower()
+            if name.endswith('.pdf'):
+                name = name[:-4]
+            name = name.replace('_', ' ').strip()
+            if not name:
+                return "General"
+            words = name.split()
+            normalized_words = [word.capitalize() for word in words]
+            return " ".join(normalized_words)
+        
+        # Normalize assessment title function (for deduplication)
+        def normalize_assessment_title(raw_title: str) -> str:
+            """Normalize assessment title to avoid duplicates."""
+            if not raw_title or not isinstance(raw_title, str):
+                return "Untitled Assessment"
+            
+            title = raw_title.strip().lower()
+            title = title.replace('.pdf', '')
+            title = title.replace('_', ' ').replace('-', ' ')
+            title = " ".join(title.split())
+            
+            words = title.split()
+            words = [word for word in words if word != 'pdf']
+            title = " ".join(words)
+            
+            if not title:
+                return "Untitled Assessment"
+            
+            words = title.split()
+            normalized_words = [word.capitalize() for word in words]
+            return " ".join(normalized_words)
+        
+        # Format assessments for frontend
+        formatted_assessments = []
+        seen_titles = {}
+        
+        for assessment in assessments:
+            raw_skill = assessment.get("skill_domain", "Unknown")
+            normalized_skill = normalize_domain(raw_skill)
+            
+            raw_title = assessment.get("title") or assessment.get("assessment_title") or "Untitled Assessment"
+            normalized_title = normalize_assessment_title(raw_title)
+            
+            title_key = normalized_title.lower()
+            
+            # Skip duplicates
+            if title_key in seen_titles:
+                continue
+            
+            seen_titles[title_key] = True
+            
+            formatted_assessments.append({
+                "id": assessment.get("id"),
+                "title": normalized_title,
+                "original_title": raw_title,
+                "skill_name": normalized_skill,
+                "skill_domain": normalized_skill,
+                "description": assessment.get("description"),
+                "question_count": assessment.get("question_count", 10),
+                "duration_minutes": assessment.get("duration_minutes", 30),
+                "difficulty": assessment.get("difficulty", "medium")
+            })
+        
+        response_data = {
+            "success": True,
+            "assessments": formatted_assessments,
+            "total": len(formatted_assessments)
+        }
+        
+        # Include course_name if filtering by course
+        if course_name:
+            response_data["course_name"] = course_name
+        
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting assessments: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error getting assessments: {str(e)}"
         )
 
 
@@ -265,12 +412,14 @@ async def get_assessments_by_course(course_id: str):
             .execute()
         
         if not course_response.data or len(course_response.data) == 0:
+            logger.warning(f"Course not found: {course_id}")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Course not found: {course_id}"
             )
         
         course_name = course_response.data[0].get("name", "Course")
+        logger.debug(f"Retrieved course: {course_name} (ID: {course_id})")
         
         # Get assessments by course_id ONLY (strict filtering)
         assessments_response = client.table("assessments")\
@@ -281,7 +430,7 @@ async def get_assessments_by_course(course_id: str):
         
         assessments = assessments_response.data if assessments_response.data else []
         
-        logger.info(f"✅ Retrieved {len(assessments)} assessment(s) for course: {course_name} (ID: {course_id})")
+        logger.info(f"Retrieved {len(assessments)} assessment(s) for course: {course_name} (ID: {course_id})")
         
         # Normalize domain name function (same as get_assessments)
         def normalize_domain(raw_name: str) -> str:
@@ -412,12 +561,15 @@ async def get_assessment_questions(assessment_id: str):
             .limit(1)\
             .execute()
         
-        assessment = assessment_response.data[0] if assessment_response.data else None
-        if not assessment:
+        if not assessment_response.data or len(assessment_response.data) == 0:
+            logger.warning(f"No assessment data returned for assessment_id: {assessment_id}")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assessment not found"
             )
+        
+        logger.debug(f"Retrieved assessment data for assessment_id: {assessment_id}")
+        assessment = assessment_response.data[0]
         
         # Try to get questions from blueprint first
         blueprint = assessment.get("blueprint")
@@ -428,8 +580,9 @@ async def get_assessment_questions(assessment_id: str):
                 import json
                 blueprint_data = json.loads(blueprint) if isinstance(blueprint, str) else blueprint
                 question_ids = blueprint_data.get("question_ids", [])
-            except:
-                pass
+            except (json.JSONDecodeError, TypeError, ValueError) as e:
+                logger.debug(f"Error parsing blueprint JSON: {str(e)}")
+                question_ids = []
         
         # Get questions - try multiple methods in order of preference
         questions = []
@@ -491,10 +644,10 @@ async def get_assessment_questions(assessment_id: str):
                 if test_user_id:
                     system_user_id = str(test_user_id)
                 else:
-                    logger.error("❌ Could not get test user. Attempt creation will fail.")
+                    logger.error("Could not get test user. Attempt creation will fail.")
                     logger.error("   Please ensure auth.users has at least one user, then run the SQL in profile_service.py")
             except Exception as e:
-                logger.error(f"❌ Error getting test user: {str(e)}")
+                logger.error(f"Error getting test user: {str(e)}")
                 import traceback
                 logger.error(traceback.format_exc())
             
@@ -504,7 +657,7 @@ async def get_assessment_questions(assessment_id: str):
                     "assessment_id": str(assessment_id),
                     "user_id": system_user_id,
                     "status": "in_progress",
-                    "started_at": datetime.utcnow().isoformat(),
+                    "started_at": datetime.now(timezone.utc).isoformat(),
                     "duration_minutes": assessment.get("duration_minutes", 30),
                     "total_score": 0,
                     "max_score": len(formatted_questions),
@@ -518,7 +671,7 @@ async def get_assessment_questions(assessment_id: str):
                     attempt_id = attempt.get("id") if attempt else None
                     
                     if not attempt_id:
-                        logger.error("❌ Failed to create attempt - no ID returned")
+                        logger.error("Failed to create attempt - no ID returned")
                         logger.error(f"Insert response: {attempt_response.data if attempt_response else 'No response'}")
                         logger.error(f"Attempt data sent: {attempt_data}")
                     else:
@@ -531,17 +684,17 @@ async def get_assessment_questions(assessment_id: str):
                                 .limit(1)\
                                 .execute()
                             if not verify_response.data:
-                                logger.error(f"❌ Attempt creation verification failed - attempt not found in database")
+                                logger.error(f"Attempt creation verification failed - attempt not found in database")
                         except Exception as verify_error:
-                            logger.error(f"❌ Error verifying attempt: {str(verify_error)}")
+                            logger.error(f"Error verifying attempt: {str(verify_error)}")
                 except Exception as insert_error:
-                    logger.error(f"❌ Error inserting attempt: {str(insert_error)}")
+                    logger.error(f"Error inserting attempt: {str(insert_error)}")
                     import traceback
                     logger.error(traceback.format_exc())
                     attempt_id = None
             else:
-                logger.error("❌ No user_id available - cannot create attempt. Submission will fail.")
-                logger.error("⚠️  SOLUTION: Ensure at least one profile exists in the 'profiles' table.")
+                logger.error("No user_id available - cannot create attempt. Submission will fail.")
+                logger.error("SOLUTION: Ensure at least one profile exists in the 'profiles' table.")
                 logger.error("   Run create_test_user.sql in Supabase SQL Editor to create the test user.")
                 # Still return questions, but attempt_id will be None
                 attempt_id = None
@@ -561,12 +714,12 @@ async def get_assessment_questions(assessment_id: str):
             "title": assessment.get("title") or assessment.get("skill_domain", "Assessment"),
             "questions": formatted_questions,
             "duration_minutes": assessment.get("duration_minutes", 30),
-            "started_at": attempt.get("started_at") if attempt else datetime.utcnow().isoformat()
+            "started_at": attempt.get("started_at") if attempt else datetime.now(timezone.utc).isoformat()
         }
         
         # Log warning if attempt_id is missing
         if not attempt_id:
-            logger.error(f"❌ No attempt_id created for assessment {assessment_id}. Submission will fail.")
+            logger.error(f"No attempt_id created for assessment {assessment_id}. Submission will fail.")
             logger.error("   This usually means no user profile exists in the database.")
             logger.error("   Please ensure at least one profile exists in the 'profiles' table.")
             # Still return questions so user can see them, but they can't submit
@@ -655,8 +808,9 @@ async def start_assessment(
                 import json
                 blueprint_data = json.loads(blueprint) if isinstance(blueprint, str) else blueprint
                 question_ids = blueprint_data.get("question_ids", [])
-            except:
-                pass
+            except (json.JSONDecodeError, TypeError, ValueError) as e:
+                logger.debug(f"Error parsing blueprint JSON: {str(e)}")
+                question_ids = []
         
         # If no question_ids from blueprint, get questions by topic
         if not question_ids:
@@ -714,7 +868,7 @@ async def start_assessment(
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"❌ Error getting test user: {str(e)}")
+            logger.error(f"Error getting test user: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error getting test user: {str(e)}"
@@ -724,7 +878,7 @@ async def start_assessment(
             "assessment_id": str(assessment_id),
             "user_id": system_user_id,
             "status": "in_progress",
-            "started_at": datetime.utcnow().isoformat(),
+            "started_at": datetime.now(timezone.utc).isoformat(),
             "duration_minutes": assessment.get("duration_minutes", 30)
         }
         
@@ -784,7 +938,7 @@ async def submit_assessment(
         
         # Verify attempt exists
         if not request.attempt_id:
-            logger.error("❌ Missing attempt_id in submit request")
+            logger.error("Missing attempt_id in submit request")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Missing attempt_id. Please start a new assessment."
@@ -803,7 +957,7 @@ async def submit_assessment(
         
         if not attempt:
             # Log available attempts for debugging
-            logger.error(f"❌ Attempt not found: {attempt_id_str}")
+            logger.error(f"Attempt not found: {attempt_id_str}")
             try:
                 # Get a sample of recent attempts for debugging
                 recent_attempts = client.table("attempts")\
@@ -811,8 +965,9 @@ async def submit_assessment(
                     .order("started_at", desc=True)\
                     .limit(5)\
                     .execute()
-            except:
-                pass
+                logger.debug(f"Recent attempts sample: {len(recent_attempts.data) if recent_attempts.data else 0} found")
+            except Exception as debug_error:
+                logger.debug(f"Could not fetch recent attempts for debugging: {str(debug_error)}")
             
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -894,7 +1049,7 @@ async def submit_assessment(
         # Update attempt
         update_data = {
             "status": "completed",
-            "completed_at": datetime.utcnow().isoformat(),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
             "total_score": total_score,
             "max_score": max_score,
             "percentage_score": percentage_score
@@ -915,7 +1070,8 @@ async def submit_assessment(
                     .eq("id", str(assessment_id))\
                     .limit(1)\
                     .execute()
-                if assessment_response.data:
+                if assessment_response.data and len(assessment_response.data) > 0:
+                    logger.debug(f"Retrieved assessment info for feedback: assessment_id={assessment_id}")
                     assessment = assessment_response.data[0]
                     skill_domain = assessment.get("skill_domain") or assessment.get("title")
             except Exception as e:
@@ -939,7 +1095,7 @@ async def submit_assessment(
         # Create result - use user_id from attempt (required by schema)
         user_id = attempt.get("user_id")
         if not user_id:
-            logger.warning("⚠️  Attempt has no user_id - cannot create result record")
+            logger.warning("Attempt has no user_id - cannot create result record")
             # Still return success, but log warning
         else:
             result_data_db = {
@@ -1019,6 +1175,7 @@ async def get_attempt_result(attempt_id: str):
                 "detail": f"Attempt not found: {attempt_id}"
             }
         
+        logger.debug(f"Retrieved attempt data for attempt_id: {attempt_id}")
         attempt = attempt_response.data[0]
         result = attempt.get("results")
         if isinstance(result, list) and result:
@@ -1238,7 +1395,8 @@ async def get_progress():
                 scores.append(score)
                 
                 skill = attempt.get("assessments", {}).get("skill_domain") if attempt.get("assessments") else "Unknown"
-                if isinstance(attempt.get("assessments"), list) and attempt.get("assessments"):
+                if isinstance(attempt.get("assessments"), list) and len(attempt.get("assessments", [])) > 0:
+                    logger.debug(f"Extracting skill from assessments list for attempt: {attempt.get('id')}")
                     skill = attempt.get("assessments")[0].get("skill_domain", "Unknown")
                 
                 if skill not in skill_scores:
@@ -1250,7 +1408,7 @@ async def get_progress():
                     recent_assessments.append({
                         "id": attempt.get("id"),
                         "skill_name": skill,
-                        "title": attempt.get("assessments", {}).get("title") if isinstance(attempt.get("assessments"), dict) and attempt.get("assessments") else (attempt.get("assessments")[0].get("title") if isinstance(attempt.get("assessments"), list) and attempt.get("assessments") else skill),
+                        "title": attempt.get("assessments", {}).get("title") if isinstance(attempt.get("assessments"), dict) and attempt.get("assessments") else (attempt.get("assessments")[0].get("title") if isinstance(attempt.get("assessments"), list) and len(attempt.get("assessments", [])) > 0 else skill),
                         "score": score,
                         "max_score": 100,
                         "date": attempt.get("completed_at", attempt.get("started_at")),

@@ -9,7 +9,7 @@
 
 ---
 
-## 🎯 Overview
+## Overview
 
 **Skill Assessment Platform API** is a **backend-only REST API service** that automates the complete assessment lifecycle from PDF upload to results delivery. This service provides RESTful APIs for frontend applications (like Edify) to integrate assessment functionality.
 
@@ -27,70 +27,192 @@ The system:
 
 ### Key Features
 
-- 📄 **PDF-Based System**: Upload and process PDF documents exclusively
-- 🔄 **End-to-End Pipeline**: Complete workflow from PDF upload to assessment results
-- 🤖 **AI-Powered Question Generation**: Automatically generates MCQ questions from PDF content using OpenAI GPT-4o-mini
-- 🔍 **RAG-Powered**: Uses vector embeddings for context-aware question generation
-- 📚 **Course-Based Organization**: Organizes assessments by courses with automatic course detection
-- 🎯 **Automated Scoring**: Instant scoring for MCQ questions
-- 💬 **Personalized Feedback**: AI-generated feedback based on performance
-- 🔐 **JWT Authentication**: Secure authentication via Supabase Auth
-- 📊 **Progress Tracking**: Monitor user progress across courses and assessments
-- 🌐 **API-Only**: Clean REST API service ready for frontend integration
+- **PDF-Based System**: Upload and process PDF documents exclusively
+- **End-to-End Pipeline**: Complete workflow from PDF upload to assessment results
+- **AI-Powered Question Generation**: Automatically generates MCQ questions from PDF content using OpenAI GPT-4o-mini
+- **RAG-Powered**: Uses vector embeddings for context-aware question generation
+- **Course-Based Organization**: Organizes assessments by courses with automatic course detection
+- **Automated Scoring**: Instant scoring for MCQ questions
+- **Personalized Feedback**: AI-generated feedback based on performance
+- **JWT Authentication**: Secure authentication via Supabase Auth
+- **Progress Tracking**: Monitor user progress across courses and assessments
+- **API-Only**: Clean REST API service ready for frontend integration
 
 ---
 
-## 🏗️ System Architecture
+## System Architecture
+
+### Architecture Overview
+
+This is a **layered architecture** with clear separation of concerns:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    PRESENTATION LAYER                       │
+│  Edify Frontend (Separate codebase - React/Vue/etc)        │
+│  Consumes REST APIs via HTTPS + JWT Bearer Tokens          │
+└───────────────────────┬─────────────────────────────────────┘
+                        │
+                        ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      API LAYER (FastAPI)                    │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Middleware Stack                                     │  │
+│  │  • CORS (Edify domains)                               │  │
+│  │  • Request ID Generation                             │  │
+│  │  • Request Timing                                    │  │
+│  │  • Rate Limiting (100 req/min)                      │  │
+│  └──────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Route Handlers                                      │  │
+│  │  • /api/* (Dashboard, Assessments)                  │  │
+│  │  • /auth/* (Authentication)                        │  │
+│  │  • /api/pdf/* (PDF Upload)                          │  │
+│  │  • /api/folder/* (Folder Upload)                    │  │
+│  └──────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Exception Handlers                                  │  │
+│  │  • Global Exception Handler                          │  │
+│  │  • AppException Handler                              │  │
+│  │  • HTTPException Handler                             │  │
+│  │  • ValidationError Handler                           │  │
+│  └──────────────────────────────────────────────────────┘  │
+└───────────────────────┬─────────────────────────────────────┘
+                        │
+                        ▼
+┌─────────────────────────────────────────────────────────────┐
+│                     SERVICE LAYER                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │
+│  │ Assessment   │  │ PDF          │  │ RAG          │    │
+│  │ Generator    │  │ Processor    │  │ Service      │    │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘    │
+│         │                  │                  │            │
+│  ┌──────┴───────┐  ┌──────┴───────┐  ┌──────┴───────┐    │
+│  │ Topic        │  │ Embedding    │  │ Feedback     │    │
+│  │ Question     │  │ Service      │  │ Service      │    │
+│  │ Service      │  └──────────────┘  └──────────────┘    │
+│  └──────────────┘                                        │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Supabase Service (Database + Storage)                │  │
+│  └──────────────────────────────────────────────────────┘  │
+└───────────────────────┬─────────────────────────────────────┘
+                        │
+                        ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  DATA LAYER (Supabase)                      │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  PostgreSQL Database (10 Tables)                     │  │
+│  │  • Core Assessment Tables (7)                       │  │
+│  │  • PDF/RAG Tables (3)                               │  │
+│  │  • pgvector Extension (vector similarity)           │  │
+│  └──────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Supabase Storage (PDF files in 'pdfs' bucket)      │  │
+│  └──────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Supabase Auth (JWT authentication)                  │  │
+│  └──────────────────────────────────────────────────────┘  │
+└───────────────────────┬─────────────────────────────────────┘
+                        │
+                        ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  EXTERNAL INTEGRATIONS                      │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  OpenAI API                                           │  │
+│  │  • GPT-4o-mini (question generation, feedback)     │  │
+│  │  • text-embedding-3-small (1536-dim embeddings)     │  │
+│  └──────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ### Components
 
-1. **FastAPI Backend**: RESTful API server providing REST APIs for assessment management
-2. **Supabase Database**: PostgreSQL with pgvector extension for storing assessments, questions, attempts, and embeddings
-3. **Supabase Auth**: JWT-based authentication and user management
-4. **OpenAI API**: Direct integration for question generation, embeddings, and feedback
-5. **Service Layer**: Python services for assessment generation, RAG search, feedback generation, and database operations
+1. **FastAPI Backend**: RESTful API server with async/await support
+   - Middleware: CORS, Request ID, Timing, Rate Limiting
+   - Exception handling: Centralized error handlers
+   - Route organization: Modular route handlers by feature
+
+2. **Supabase Database**: PostgreSQL with pgvector extension
+   - 10 tables: 7 core assessment tables + 3 PDF/RAG tables
+   - Vector similarity search via `match_pdf_embeddings()` function
+   - Row Level Security (RLS) for data access control
+
+3. **Supabase Auth**: JWT-based authentication
+   - Token validation on protected endpoints
+   - User profile management
+   - Token expiration handling
+
+4. **OpenAI API**: Direct integration for AI features
+   - Question generation (GPT-4o-mini)
+   - Embedding generation (text-embedding-3-small)
+   - Feedback generation (GPT-4o-mini)
+   - Timeout handling (60 seconds) with retry logic
+
+5. **Service Layer**: Business logic services
+   - Assessment generation from PDF embeddings
+   - PDF processing (extract, chunk, embed)
+   - RAG search (vector similarity)
+   - Feedback generation
+   - Database operations abstraction
 
 **Note**: This is an **API-only backend service**. Frontend UI is handled separately by the Edify team.
 
 ### Data Flow
 
-**Phase 1: PDF Upload & Processing**
-1. Frontend uploads PDF via `POST /api/pdf/upload`
-2. File stored in Supabase Storage (bucket: `pdfs`)
-3. PDF metadata recorded in `pdf_documents` table
-4. Processing status tracked in `pdf_processing_log`
-5. Background processing: Extract → Chunk → Embed
+#### Phase 1: PDF Upload & Processing
 
-**Phase 2: Text Extraction & Embedding**
-1. Extract text page-by-page from PDF
-2. Chunk text into 500-1000 character segments
-3. Generate embeddings using OpenAI `text-embedding-3-small`
-4. Store chunks and embeddings in `pdf_embeddings` table
+1. **Upload**: Frontend uploads PDF via `POST /api/pdf/upload`
+2. **Storage**: File stored in Supabase Storage (bucket: `pdfs`)
+3. **Metadata**: PDF metadata recorded in `pdf_documents` table (status: `uploaded`)
+4. **Logging**: Processing status tracked in `pdf_processing_log` table
+5. **Background Processing** (async):
+   - Status → `processing`
+   - **Extract**: PyPDF2 extracts text page-by-page
+   - **Chunk**: Text split into 500-1000 character segments
+   - **Embed**: OpenAI API generates embeddings (batch processing)
+   - **Store**: Chunks + embeddings stored in `pdf_embeddings` table
+   - Status → `processed`
 
-**Phase 3: Question Generation (RAG)**
-1. Call `POST /api/generateAssessments`
-2. Perform vector similarity search on `pdf_embeddings`
-3. Retrieve relevant context chunks
-4. Generate MCQ questions using OpenAI GPT-4o-mini
-5. Store questions in `skill_assessment_questions` table
+#### Phase 2: Question Generation (RAG)
 
-**Phase 4: Assessment Creation**
-1. Group questions by topic/skill domain
-2. Create assessment record in `assessments` table
-3. Link to course via `course_id` in `courses` table
+1. **Trigger**: Call `POST /api/generateAssessments`
+2. **Source Retrieval**: Service reads all PDF sources from `pdf_embeddings` table
+3. **For Each PDF**:
+   - Retrieve chunks via `get_chunks_for_source()`
+   - **Vector Search**: RAG service performs similarity search
+   - **Context Retrieval**: Top-k similar chunks retrieved (default: 10, threshold: 0.7)
+   - **Question Generation**: OpenAI GPT-4o-mini generates MCQ questions with context
+   - **Storage**: Questions stored in `skill_assessment_questions` table
 
-**Phase 5: User Assessment**
-1. User authenticates via `POST /auth/login` (returns JWT token)
-2. Frontend calls `GET /api/getAssessments` to view courses
-3. User starts assessment → `GET /api/assessments/{id}/questions` creates `attempts` record
-4. User submits answers → `POST /api/submitAssessment` stores in `responses` table
-5. System scores answers automatically
-6. Generate AI feedback → stored in `results` table
-7. Frontend retrieves results via `GET /api/attempts/{attempt_id}/result`
+#### Phase 3: Assessment Creation
+
+1. **Grouping**: Questions grouped by topic/skill domain
+2. **Assessment Record**: Created in `assessments` table
+3. **Blueprint**: `question_ids` stored in `blueprint` JSONB field
+4. **Course Link**: Assessment linked to course via `course_id` in `courses` table
+5. **Status**: Assessment set to `published` status
+
+#### Phase 4: User Assessment Flow
+
+1. **Authentication**: User authenticates via `POST /auth/login` (returns JWT token)
+2. **Browse**: Frontend calls `GET /api/assessments?course_id={id}` to view assessments
+3. **Start**: User starts assessment → `GET /api/assessments/{id}/questions`
+   - Creates `attempts` record (status: `in_progress`)
+   - Returns questions to frontend
+4. **Submit**: User submits answers → `POST /api/submitAssessment`
+   - Stores answers in `responses` table
+   - Auto-scores MCQ questions (compares `selected_option` with `correct_answer`)
+   - Updates `attempts` record (status: `completed`, scores calculated)
+   - Creates `results` record with overall scores
+5. **Feedback**: AI feedback generated via `feedback_service`
+   - Analyzes performance (score, percentage, topic breakdown)
+   - Generates personalized feedback using OpenAI GPT-4o-mini
+   - Stores feedback in `results` table
+6. **Retrieve**: Frontend retrieves results via `GET /api/attempts/{attempt_id}/result`
 
 ---
 
-## 🛠️ Technology Stack
+## Technology Stack
 
 ### Backend
 - **Python 3.10+**: Core programming language
@@ -118,7 +240,7 @@ The system:
 
 ---
 
-## 📦 Installation
+## Installation
 
 ### Prerequisites
 
@@ -180,7 +302,7 @@ CORS_ORIGINS=http://localhost:3000,http://localhost:5173
 
 ---
 
-## 🗄️ Supabase Setup
+## Supabase Setup
 
 ### Step 1: Create NEW Supabase Project
 
@@ -245,7 +367,7 @@ Should return exactly **10 rows**.
 
 ---
 
-## 🚀 Running the Application
+## Running the Application
 
 ### Local Development
 
@@ -268,7 +390,7 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 ---
 
-## 📚 API Documentation
+## API Documentation
 
 ### Base URL
 
@@ -285,7 +407,7 @@ Authorization: Bearer {access_token}
 
 ---
 
-## 🔐 Authentication Endpoints
+## Authentication Endpoints
 
 ### POST /auth/login
 
@@ -367,7 +489,7 @@ Authorization: Bearer {access_token}
 
 ---
 
-## 📊 Dashboard Endpoints
+## Dashboard Endpoints
 
 ### GET /api/getAssessments
 
@@ -439,9 +561,49 @@ Authorization: Bearer {access_token}
 
 ---
 
+### GET /api/assessments
+
+Get assessments with optional course filter (query parameter).
+
+**Query Parameters:**
+- `course_id` (string, optional): Course UUID to filter assessments
+
+**Headers:** (Optional)
+```http
+Authorization: Bearer {access_token}
+```
+
+**Examples:**
+- `GET /api/assessments` - Returns all published assessments
+- `GET /api/assessments?course_id=abc-123` - Returns assessments for specific course
+
+**Response:**
+```json
+{
+  "success": true,
+  "assessments": [
+    {
+      "id": "uuid",
+      "title": "Python Fundamentals",
+      "course_id": "uuid",
+      "course_name": "Python",
+      "difficulty": "medium",
+      "question_count": 10,
+      "status": "published"
+    }
+  ]
+}
+```
+
+**Status Codes:**
+- `200` - Success
+- `503` - Service unavailable
+
+---
+
 ### GET /api/assessments/by_course/{course_id}
 
-Get all assessments for a specific course.
+Get all assessments for a specific course (path parameter version).
 
 **Path Parameters:**
 - `course_id` (string, required): Course UUID
@@ -474,6 +636,8 @@ Authorization: Bearer {access_token}
 - `200` - Success
 - `404` - Course not found
 - `503` - Service unavailable
+
+**Note:** This endpoint is equivalent to `GET /api/assessments?course_id={course_id}` but uses path parameter instead of query parameter.
 
 ---
 
@@ -626,7 +790,7 @@ Authorization: Bearer {access_token}
 
 ---
 
-## 📄 PDF Upload Endpoints
+## PDF Upload Endpoints
 
 ### POST /api/pdf/upload
 
@@ -704,7 +868,7 @@ Get processing status of a PDF.
 
 ---
 
-## 📁 Folder Upload Endpoints
+## Folder Upload Endpoints
 
 ### POST /api/folder/upload
 
@@ -775,7 +939,7 @@ List all uploaded course folders.
 
 ---
 
-## 🤖 Assessment Generation Endpoints
+## Assessment Generation Endpoints
 
 ### POST /api/generateAssessments
 
@@ -835,7 +999,7 @@ Sync embeddings: Convert all pdf_embeddings into questions and assessments (alia
 
 ---
 
-## 🏥 System Endpoints
+## System Endpoints
 
 ### GET /health
 
@@ -851,7 +1015,7 @@ Health check endpoint with system status.
   "checks": {
     "supabase": {
       "status": "connected",
-      "test": "✅ Connection successful"
+                    "test": "Connection successful"
     },
     "openai": "configured",
     "cache": {...}
@@ -885,7 +1049,7 @@ Root endpoint - API information.
 
 ---
 
-## 📖 Usage Examples
+## Usage Examples
 
 ### Complete Assessment Flow
 
@@ -991,7 +1155,7 @@ curl -X POST http://localhost:8000/api/generateAssessments
 
 ---
 
-## 🏗️ Project Structure
+## Project Structure
 
 ```
 Assessments/
@@ -1036,7 +1200,7 @@ Assessments/
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 ### Environment Variables
 
@@ -1067,9 +1231,43 @@ The API is configured to allow requests from Edify domains:
 
 ---
 
-## 🚀 Deployment
+## Deployment
 
-### Vercel Deployment (Recommended)
+### Deployment Architecture
+
+#### Local Development
+- **Runtime**: Uvicorn ASGI server
+- **Port**: 8000 (default)
+- **Hot Reload**: Enabled in debug mode
+- **File System**: Full read/write access
+- **Background Jobs**: Run in same process
+
+#### Vercel Serverless Deployment (Recommended)
+
+**Architecture:**
+```
+Vercel Platform
+├── Serverless Functions (Python runtime)
+│   ├── api/index.py (entry point)
+│   └── app/main.py (FastAPI app)
+├── Environment Variables (from Vercel dashboard)
+└── Build Configuration (vercel.json)
+```
+
+**Constraints:**
+- **Timeout**: 10 seconds (Hobby) / 60 seconds (Pro)
+- **File System**: Read-only (except `/tmp`)
+- **Cold Starts**: First request may be slower
+- **Stateless**: No persistent in-memory state between invocations
+- **Background Processing**: Must run separately (not in API functions)
+
+**Optimizations:**
+- Client caching (Supabase client reused)
+- Async operations (non-blocking I/O)
+- Minimal cold start (lazy imports)
+- Connection pooling (handled by Supabase)
+
+### Vercel Deployment Steps
 
 1. **Connect Repository** to Vercel
 2. **Set Environment Variables** in Vercel dashboard:
@@ -1077,8 +1275,15 @@ The API is configured to allow requests from Edify domains:
    - `SUPABASE_KEY`
    - `SUPABASE_SERVICE_KEY`
    - `OPENAI_API_KEY`
-   - `DEBUG=False`
+   - `OPENAI_MODEL` (optional, default: `gpt-4o-mini`)
+   - `OPENAI_EMBEDDING_MODEL` (optional, default: `text-embedding-3-small`)
+   - `DEBUG=False` (for production)
 3. **Deploy** - Vercel will automatically detect `vercel.json` and deploy
+
+**Important Notes:**
+- PDF processing should run separately (not in serverless functions) due to timeout constraints
+- Use `scripts/process_uploads.py` for background PDF processing
+- Health check endpoint (`/health`) can be used for monitoring
 
 ### Other Platforms
 
@@ -1104,7 +1309,7 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 ---
 
-## 🔌 Edify Integration Guide
+## Edify Integration Guide
 
 ### Base API URL
 
@@ -1203,38 +1408,80 @@ try {
 
 ---
 
-## 🗄️ Database Schema
+## Database Schema
 
 ### Core Tables (7)
 
 1. **profiles** - User profiles linked to Supabase Auth
+   - Columns: `id` (UUID, PK), `email`, `full_name`, `role`, `organization`
+   - Indexes: `email`, `role`
+
 2. **courses** - Course definitions
+   - Columns: `id` (UUID, PK), `name` (unique), `description`
+   - Indexes: `name`
+
 3. **assessments** - Assessment configurations
+   - Columns: `id` (UUID, PK), `title`, `skill_domain`, `difficulty`, `question_count`, `status`, `blueprint` (JSONB), `course_id` (FK)
+   - Indexes: `course_id`, `status`, `skill_domain`, `created_by`
+
 4. **skill_assessment_questions** - Generated MCQ questions
+   - Columns: `id` (UUID, PK), `assessment_id` (FK, nullable), `topic`, `question`, `options` (JSONB), `correct_answer`, `explanation`, `difficulty`, `question_type`
+   - Indexes: `assessment_id`, `topic`, `difficulty`, `question_type`
+   - **Note**: `assessment_id` may be NULL; questions linked via `blueprint.question_ids` in assessments table
+
 5. **attempts** - User assessment attempts
+   - Columns: `id` (UUID, PK), `assessment_id` (FK), `user_id` (FK), `status`, `started_at`, `completed_at`, `total_score`, `max_score`, `percentage_score`
+   - Indexes: `assessment_id`, `user_id`, `status`, `created_at`
+
 6. **responses** - Individual question responses
+   - Columns: `id` (UUID, PK), `attempt_id` (FK), `question_id` (FK), `answer_text`, `selected_option`, `score`, `max_score`, `feedback`, `status`
+   - Indexes: `attempt_id`, `question_id`, `status`
+
 7. **results** - Aggregated assessment results
+   - Columns: `id` (UUID, PK), `attempt_id` (FK, unique), `user_id` (FK), `assessment_id` (FK), `total_score`, `max_score`, `percentage_score`, `passed`, `overall_feedback`, `feedback_json` (JSONB)
+   - Indexes: `attempt_id`, `user_id`, `assessment_id`, `passed`
 
 ### PDF/RAG Tables (3)
 
 8. **pdf_documents** - PDF metadata
+   - Columns: `id` (UUID, PK), `title`, `file_url`, `file_size`, `status`, `uploaded_by` (FK)
+   - Indexes: `status`, `uploaded_by`, `upload_date`
+
 9. **pdf_embeddings** - PDF content chunks with vector embeddings
+   - Columns: `id` (UUID, PK), `pdf_id` (FK), `pdf_title`, `chunk_text`, `embedding` (vector(1536)), `chunk_index`, `page_number`
+   - Indexes: `pdf_id`, `pdf_title`, `chunk_index`, `embedding` (ivfflat index for similarity search)
+
 10. **pdf_processing_log** - Processing status tracking
+    - Columns: `id` (UUID, PK), `pdf_id` (FK), `status`, `error_message`, `chunks_created`, `questions_generated`, `assessments_created`
+    - Indexes: `pdf_id`, `status`
 
 ### Key Relationships
 
 ```
 profiles (1) ──→ (many) attempts
+profiles (1) ──→ (many) results
 courses (1) ──→ (many) assessments
-assessments (1) ──→ (many) skill_assessment_questions
+assessments (1) ──→ (many) skill_assessment_questions (via blueprint.question_ids)
+assessments (1) ──→ (many) attempts
 attempts (1) ──→ (many) responses
 attempts (1) ──→ (1) results
 pdf_documents (1) ──→ (many) pdf_embeddings
+pdf_documents (1) ──→ (many) pdf_processing_log
 ```
+
+### Vector Similarity Search
+
+**Function**: `match_pdf_embeddings(query_embedding, match_threshold, match_count, filter_pdf_id)`
+
+**Usage**: Performs cosine similarity search on `pdf_embeddings.embedding` column
+- **Index Type**: `ivfflat` with `vector_cosine_ops`
+- **Dimension**: 1536 (OpenAI text-embedding-3-small)
+- **Default Threshold**: 0.7
+- **Default Match Count**: 10
 
 ---
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
@@ -1282,7 +1529,7 @@ pdf_documents (1) ──→ (many) pdf_embeddings
 
 ---
 
-## 📝 API Response Formats
+## API Response Formats
 
 ### Success Response
 
@@ -1319,28 +1566,92 @@ pdf_documents (1) ──→ (many) pdf_embeddings
 
 ---
 
-## 🔒 Security Considerations
+## Security Considerations
 
-- **JWT Tokens**: Tokens expire after 1 hour (configurable)
-- **CORS**: Only Edify domains allowed in production
-- **RLS**: Row-level security enforced at database level
-- **Rate Limiting**: Implemented to prevent abuse
+### Authentication & Authorization
+- **JWT Tokens**: Validated via Supabase Auth on every protected request
+- **Token Expiration**: Handled automatically (default: 1 hour)
+- **Bearer Token**: Required in `Authorization` header for protected endpoints
+- **User Context**: Stored in `request.state.user_id` after validation
+
+### Access Control
+- **RLS (Row Level Security)**: Enforced at database level in Supabase
+- **Service Key**: Used for admin operations (bypasses RLS)
+- **User Isolation**: Users can only access their own attempts and results
+- **Public Assessments**: Published assessments readable by anonymous users
+
+### API Security
+- **CORS**: Only Edify domains allowed in production (`https://edify.com`, etc.)
+- **Rate Limiting**: Sliding window algorithm (100 requests/minute default)
 - **Input Validation**: All inputs validated via Pydantic models
-- **Error Messages**: Sensitive information not exposed in errors
+- **Error Messages**: Sensitive information not exposed in errors (DEBUG mode only)
+- **Request ID**: Every request has unique ID for tracking and debugging
+
+### Data Protection
+- **Environment Variables**: Sensitive credentials stored in environment (not in code)
+- **HTTPS**: All production traffic encrypted
+- **SQL Injection**: Prevented via parameterized queries (Supabase client)
+- **XSS**: Not applicable (API-only, no HTML rendering)
 
 ---
 
-## 📊 Monitoring & Logging
+## Monitoring & Logging
 
-- **Health Check**: `/health` endpoint for monitoring
-- **Structured Logging**: JSON-formatted logs
-- **Request IDs**: Each request has unique ID for tracing
-- **Error Tracking**: Errors logged with full context
-- **Performance Metrics**: Request timing tracked
+### Logging Strategy
+
+**Structured Logging:**
+- **Format**: JSON-formatted logs for production
+- **Levels**: DEBUG, INFO, WARNING, ERROR
+- **Request ID**: Every request has unique UUID for correlation
+- **Context**: Logs include request path, method, user ID, timing
+
+**Log Locations:**
+- **Local**: Console output (stdout/stderr)
+- **Vercel**: Accessible via Vercel dashboard logs
+- **Structured Format**: Ready for log aggregation tools (Datadog, LogRocket, etc.)
+
+### Monitoring Endpoints
+
+**Health Check** (`GET /health`):
+- Checks Supabase connection
+- Verifies OpenAI API configuration
+- Returns cache statistics
+- Provides system status
+
+**Response Headers:**
+- `X-Request-ID`: Unique request identifier
+- `X-Process-Time`: Request processing time in milliseconds
+
+### Error Tracking
+
+**Error Response Format:**
+```json
+{
+  "success": false,
+  "error": {
+    "code": "ERROR_CODE",
+    "message": "Human-readable message",
+    "details": {},
+    "request_id": "uuid"
+  }
+}
+```
+
+**Error Logging:**
+- All errors logged with full stack trace (DEBUG mode)
+- Request context included (path, method, user ID)
+- Exception details captured for debugging
+
+### Performance Metrics
+
+- **Request Timing**: Tracked via middleware (X-Process-Time header)
+- **Database Queries**: Logged at DEBUG level
+- **API Calls**: OpenAI API calls logged with timing
+- **Cache Hits/Misses**: Tracked in cache statistics
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
@@ -1350,13 +1661,13 @@ pdf_documents (1) ──→ (many) pdf_embeddings
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License.
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - **FastAPI** - Modern web framework
 - **Supabase** - Backend-as-a-Service
@@ -1365,7 +1676,7 @@ This project is licensed under the MIT License.
 
 ---
 
-## 📞 Support
+## Support
 
 For API questions or issues:
 - Check interactive API docs at `/docs`
@@ -1374,6 +1685,6 @@ For API questions or issues:
 
 ---
 
-**Made with ❤️ using FastAPI, Supabase, and OpenAI**
+**Made with FastAPI, Supabase, and OpenAI**
 
 **API-Only Backend Service - Ready for Edify Integration**

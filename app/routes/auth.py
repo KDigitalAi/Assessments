@@ -62,7 +62,15 @@ async def login(request: LoginRequest):
             )
         
         # Get or create user profile
-        user_id = UUID(response.user.id)
+        try:
+            user_id = UUID(response.user.id)
+        except (ValueError, TypeError) as e:
+            logger.error(f"Invalid user ID format: {response.user.id if response.user else 'None'}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid user ID format"
+            )
+        
         profile = supabase_service.get_profile(user_id)
         
         if not profile:

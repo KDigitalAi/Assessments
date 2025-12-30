@@ -52,10 +52,12 @@ class RAGService:
         """
         try:
             # Generate query embedding
+            logger.debug(f"Generating query embedding for search: {query_text[:50]}...")
             query_embedding = embedding_service.generate_embedding(query_text)
             if not query_embedding:
                 logger.error("Failed to generate query embedding")
                 return []
+            logger.debug(f"Query embedding generated successfully (dimension: {len(query_embedding)})")
             
             client = supabase_service.get_client()
             if not client:
@@ -112,9 +114,10 @@ class RAGService:
                         'page_number': c.get('page_number'),
                         'similarity': c.get('similarity', 1.0)
                     } for c in chunks]
-                except Exception:
+                except Exception as fallback_error:
                     # Final fallback: Direct query (no similarity calculation)
-                    logger.warning(f"RPC functions failed, using direct query: {str(rpc_error)[:100]}")
+                    logger.warning(f"RPC functions failed, using direct query: {str(fallback_error)[:100]}")
+                    logger.debug(f"Fallback to direct query for pdf_id: {pdf_id}, match_count: {match_count}")
                     query = client.table("pdf_embeddings")\
                         .select("id, chunk_text, pdf_id, pdf_title, chunk_index, page_number")\
                         .limit(match_count)
@@ -124,6 +127,7 @@ class RAGService:
                     
                     response = query.execute()
                     chunks = response.data if response.data else []
+                    logger.debug(f"Direct query returned {len(chunks)} chunks")
                     
                     return [{
                         'id': c.get('id'),
@@ -274,15 +278,34 @@ RESPOND WITH JSON ONLY - No markdown, no explanations, no code blocks outside JS
 The entire response must be a valid JSON array that can be parsed directly"""
             
             # Generate questions using OpenAI
-            response = self.client.chat.completions.create(
-                model=settings.OPENAI_MODEL,
-                messages=[
-                    {"role": "system", "content": "You are an expert question generator. Always respond with valid JSON only."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7,
-                max_tokens=2000
-            )
+            logger.debug(f"Calling OpenAI API for question generation (type: {question_type}, difficulty: {difficulty}, num: {num_questions})")
+            try:
+                response = self.client.chat.completions.create(
+                    model=settings.OPENAI_MODEL,
+                    messages=[
+                        {"role": "system", "content": "You are an expert question generator. Always respond with valid JSON only."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.7,
+                    max_tokens=2000,
+                    timeout=60.0  # 60 second timeout for API call
+                )
+                
+                if not response.choices or len(response.choices) == 0:
+                    logger.error("OpenAI API returned no choices in response")
+                    return []
+                
+                if not response.choices[0].message or not response.choices[0].message.content:
+                    logger.error("OpenAI API returned empty message content")
+                    return []
+                
+                logger.debug("OpenAI API call completed successfully")
+            except TimeoutError as e:
+                logger.error(f"OpenAI API call timed out after 60 seconds: {str(e)}")
+                return []
+            except Exception as e:
+                logger.exception(f"OpenAI API call failed: {str(e)}")
+                return []
             
             # Parse response
             import json
@@ -353,17 +376,35 @@ Question: {question}
 
 Provide a comprehensive answer based on the context. If the context doesn't contain enough information, say so."""
             
-            response = self.client.chat.completions.create(
-                model=settings.OPENAI_MODEL,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that answers questions based on provided context from PDF documents."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7,
-                max_tokens=1000
-            )
-            
-            answer = response.choices[0].message.content.strip()
+            logger.debug(f"Generating answer from context (question: {question[:50]}..., context chunks: {len(context_chunks)})")
+            try:
+                response = self.client.chat.completions.create(
+                    model=settings.OPENAI_MODEL,
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant that answers questions based on provided context from PDF documents."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.7,
+                    max_tokens=1000,
+                    timeout=60.0  # 60 second timeout for API call
+                )
+                
+                if not response.choices or len(response.choices) == 0:
+                    logger.error("OpenAI API returned no choices in response for answer generation")
+                    return {'error': 'No response from API'}
+                
+                if not response.choices[0].message or not response.choices[0].message.content:
+                    logger.error("OpenAI API returned empty message content for answer generation")
+                    return {'error': 'Empty response from API'}
+                
+                answer = response.choices[0].message.content.strip()
+                logger.debug("Answer generated successfully")
+            except TimeoutError as e:
+                logger.error(f"OpenAI API call timed out after 60 seconds for answer generation: {str(e)}")
+                return {'error': 'API call timed out'}
+            except Exception as e:
+                logger.exception(f"OpenAI API call failed for answer generation: {str(e)}")
+                return {'error': str(e)}
             
             return {
                 'answer': answer,

@@ -313,23 +313,42 @@ The entire response must be a valid JSON array that can be parsed directly"""
             # Use more explicit system message for coding questions
             system_message = "You are an expert question generator for educational assessments. You MUST respond with ONLY a valid JSON array. Do NOT include markdown code blocks, explanations, or any text outside the JSON. Code snippets must be INSIDE the JSON question text as strings (use \\n for newlines). The response must start with [ and end with ]."
             
-            response = self.client.chat.completions.create(
-                model=settings.OPENAI_MODEL,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": system_message
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                temperature=0.7,
-                max_tokens=4000  # Increased for coding questions with code snippets
-            )
+            try:
+                logger.debug(f"Calling OpenAI API for question generation (topic: {topic}, num_questions: {num_questions})")
+                response = self.client.chat.completions.create(
+                    model=settings.OPENAI_MODEL,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": system_message
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    temperature=0.7,
+                    max_tokens=4000,  # Increased for coding questions with code snippets
+                    timeout=60.0  # 60 second timeout for API call
+                )
+                logger.debug("OpenAI API call completed successfully")
+            except TimeoutError as e:
+                logger.error(f"OpenAI API call timed out after 60 seconds for topic: {topic}")
+                raise
+            except Exception as e:
+                logger.exception(f"OpenAI API call failed for topic: {topic}")
+                raise
             
             # Parse response
+            if not response.choices or len(response.choices) == 0:
+                logger.error("OpenAI API returned no choices in response")
+                return []
+            
+            if not response.choices[0].message or not response.choices[0].message.content:
+                logger.error("OpenAI API returned empty message content")
+                return []
+            
+            logger.debug("OpenAI API response parsed successfully")
             content = response.choices[0].message.content.strip()
             
             # Check if response is just code (common error case)
@@ -350,8 +369,19 @@ The entire response must be a valid JSON array that can be parsed directly"""
                         }
                     ],
                     temperature=0.5,  # Lower temperature for more consistent output
-                    max_tokens=4000
+                    max_tokens=4000,
+                    timeout=60.0  # 60 second timeout for retry
                 )
+                
+                if not retry_response.choices or len(retry_response.choices) == 0:
+                    logger.error("OpenAI API retry returned no choices in response")
+                    return []
+                
+                if not retry_response.choices[0].message or not retry_response.choices[0].message.content:
+                    logger.error("OpenAI API retry returned empty message content")
+                    return []
+                
+                logger.debug("OpenAI API retry response parsed successfully")
                 content = retry_response.choices[0].message.content.strip()
             
             # Try to extract JSON from markdown code blocks if present
@@ -487,16 +517,35 @@ Return ONLY a JSON array with this structure:
 
 Start with [ and end with ]. No other text."""
                     
-                    final_response = self.client.chat.completions.create(
-                        model=settings.OPENAI_MODEL,
-                        messages=[
-                            {"role": "system", "content": "You are a JSON generator. Return ONLY valid JSON arrays. No markdown, no code blocks, no explanations."},
-                            {"role": "user", "content": final_prompt}
-                        ],
-                        temperature=0.3,
-                        max_tokens=4000
-                    )
-                    final_content = final_response.choices[0].message.content.strip()
+                    logger.debug("Calling OpenAI API for final retry attempt")
+                    try:
+                        final_response = self.client.chat.completions.create(
+                            model=settings.OPENAI_MODEL,
+                            messages=[
+                                {"role": "system", "content": "You are a JSON generator. Return ONLY valid JSON arrays. No markdown, no code blocks, no explanations."},
+                                {"role": "user", "content": final_prompt}
+                            ],
+                            temperature=0.3,
+                            max_tokens=4000,
+                            timeout=60.0  # 60 second timeout for final retry
+                        )
+                        
+                        if not final_response.choices or len(final_response.choices) == 0:
+                            logger.error("OpenAI API final retry returned no choices in response")
+                            return []
+                        
+                        if not final_response.choices[0].message or not final_response.choices[0].message.content:
+                            logger.error("OpenAI API final retry returned empty message content")
+                            return []
+                        
+                        logger.debug("OpenAI API final retry response parsed successfully")
+                        final_content = final_response.choices[0].message.content.strip()
+                    except TimeoutError as e:
+                        logger.error(f"OpenAI API final retry timed out after 60 seconds: {str(e)}")
+                        return []
+                    except Exception as e:
+                        logger.exception(f"OpenAI API final retry failed: {str(e)}")
+                        return []
                     # Extract JSON array
                     json_start = final_content.find("[")
                     json_end = final_content.rfind("]")

@@ -52,12 +52,15 @@ def verify_jwt_token(token: str) -> Optional[dict]:
         User information dictionary or None if invalid
     """
     try:
+        logger.debug("Starting JWT token verification")
         supabase = get_supabase_client()
         if not supabase:
+            logger.warning("Supabase client not available for token verification")
             return None
         
         # Verify token with Supabase Auth
         user_response = supabase.auth.get_user(token)
+        logger.debug("JWT token verification completed")
         
         if user_response and user_response.user:
             user = user_response.user

@@ -26,7 +26,7 @@ class SupabaseService:
             # Enhanced validation with clear error messages
             # Validate that required settings are present
             if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
-                logger.error("❌ [CRITICAL] Supabase credentials missing!")
+                logger.error("[CRITICAL] Supabase credentials missing!")
                 logger.error("   SUPABASE_URL: " + (settings.SUPABASE_URL[:50] + "..." if settings.SUPABASE_URL else "NOT SET"))
                 logger.error("   SUPABASE_KEY: " + (settings.SUPABASE_KEY[:20] + "..." if settings.SUPABASE_KEY else "NOT SET"))
                 logger.error("   SOLUTION: Set SUPABASE_URL and SUPABASE_KEY environment variables")
@@ -46,7 +46,7 @@ class SupabaseService:
             )
             
             if is_placeholder_url or is_placeholder_key:
-                logger.error("❌ [CRITICAL] Supabase credentials appear to be placeholders!")
+                logger.error("[CRITICAL] Supabase credentials appear to be placeholders!")
                 logger.error(f"   Current URL: {settings.SUPABASE_URL[:50]}...")
                 logger.error(f"   Current KEY: {settings.SUPABASE_KEY[:20]}...")
                 self.client = None
@@ -77,10 +77,10 @@ class SupabaseService:
                 # If profiles table doesn't exist, that's okay - we just want to verify connection works
                 error_msg = str(test_error).lower()
                 if "does not exist" not in error_msg and "relation" not in error_msg:
-                    logger.warning(f"⚠️  Supabase client initialized but connection test failed: {str(test_error)}")
+                    logger.warning(f"Supabase client initialized but connection test failed: {str(test_error)}")
                     # Check for RLS issues
                     if "row-level security" in error_msg or "permission denied" in error_msg:
-                        logger.warning("   ⚠️  This might be a Row Level Security (RLS) issue.")
+                        logger.warning("   This might be a Row Level Security (RLS) issue.")
                         logger.warning("   SOLUTION: Check RLS policies in Supabase dashboard")
                     
         except Exception as e:
@@ -96,14 +96,14 @@ class SupabaseService:
         try:
             # Check if service key is configured
             if not settings.SUPABASE_SERVICE_KEY:
-                logger.warning("⚠️  SUPABASE_SERVICE_KEY not configured. Admin operations may fail due to RLS.")
+                logger.warning("SUPABASE_SERVICE_KEY not configured. Admin operations may fail due to RLS.")
                 logger.warning("   SOLUTION: Add SUPABASE_SERVICE_KEY to your .env file for admin operations")
                 self.service_client = None
                 return
             
             # Check if service key is a placeholder
             if "your-supabase" in settings.SUPABASE_SERVICE_KEY.lower() or "placeholder" in settings.SUPABASE_SERVICE_KEY.lower():
-                logger.warning("⚠️  SUPABASE_SERVICE_KEY appears to be a placeholder. Admin operations may fail.")
+                logger.warning("SUPABASE_SERVICE_KEY appears to be a placeholder. Admin operations may fail.")
                 self.service_client = None
                 return
             
@@ -161,6 +161,7 @@ class SupabaseService:
     def get_profile(self, user_id: UUID) -> Optional[Dict[str, Any]]:
         """Get user profile by ID"""
         try:
+            logger.debug(f"Fetching profile for user_id: {user_id}")
             client = self._ensure_client()
             response = client.table("profiles").select("*").eq("id", str(user_id)).execute()
             if response.data:
@@ -173,6 +174,7 @@ class SupabaseService:
     def create_profile(self, user_id: UUID, email: str, **kwargs) -> Optional[Dict[str, Any]]:
         """Create user profile"""
         try:
+            logger.info(f"Creating profile for user_id: {user_id}, email: {email}")
             client = self._ensure_client()
             data = {
                 "id": str(user_id),
@@ -285,7 +287,7 @@ class SupabaseService:
             if "embedding" in question_data and question_data["embedding"]:
                 question_data["embedding"] = str(question_data["embedding"])
             
-            response = client.table("questions").insert(question_data).execute()
+            response = client.table("skill_assessment_questions").insert(question_data).execute()
             return response.data[0] if response.data else None
         except Exception as e:
             logger.error(f"Error creating question: {str(e)}")
@@ -303,7 +305,7 @@ class SupabaseService:
         
         try:
             client = self._ensure_client()
-            response = client.table("questions").select("*").eq("id", str(question_id)).execute()
+            response = client.table("skill_assessment_questions").select("*").eq("id", str(question_id)).execute()
             result = response.data[0] if response.data else None
             
             # Cache result
@@ -343,7 +345,7 @@ class SupabaseService:
             if uncached_ids:
                 # Use Supabase's 'in' filter for batch query
                 id_strings = [str(qid) for qid in uncached_ids]
-                response = client.table("questions").select("*").in_("id", id_strings).execute()
+                response = client.table("skill_assessment_questions").select("*").in_("id", id_strings).execute()
                 
                 # Build dictionary and cache - optimized single pass
                 cache_ttl = 600 if use_cache else None
@@ -376,7 +378,7 @@ class SupabaseService:
         
         try:
             client = self._ensure_client()
-            query = client.table("questions").select("*").eq("assessment_id", str(assessment_id))
+            query = client.table("skill_assessment_questions").select("*").eq("assessment_id", str(assessment_id))
             
             if limit:
                 query = query.limit(limit)
@@ -547,10 +549,12 @@ class SupabaseService:
     def upload_file(self, bucket_name: str, file_path: str, file_content: bytes, content_type: str = "application/pdf") -> Optional[str]:
         """Upload file to Supabase Storage"""
         try:
+            logger.debug(f"Starting file upload to Supabase Storage: bucket={bucket_name}, path={file_path}, size={len(file_content)} bytes")
             client = self._ensure_client()
             # Ensure bucket exists (create if not)
             try:
                 client.storage.from_(bucket_name).upload(file_path, file_content, file_options={"content-type": content_type})
+                logger.debug(f"File uploaded successfully to {bucket_name}/{file_path}")
             except Exception as e:
                 logger.warning(f"Upload failed, may need to create bucket: {str(e)}")
                 # Try creating bucket first (requires admin)
@@ -558,9 +562,14 @@ class SupabaseService:
             
             # Get public URL
             url = client.storage.from_(bucket_name).get_public_url(file_path)
-            return url.data if hasattr(url, 'data') else str(url)
+            result = url.data if hasattr(url, 'data') else str(url)
+            logger.debug(f"File upload completed, public URL generated")
+            return result
+        except TimeoutError as e:
+            logger.error(f"File upload to Supabase Storage timed out: {str(e)}")
+            return None
         except Exception as e:
-            logger.error(f"Error uploading file: {str(e)}")
+            logger.exception(f"Error uploading file to Supabase Storage: {str(e)}")
             return None
     
     def get_signed_url(self, bucket_name: str, file_path: str, expires_in: int = 3600) -> Optional[str]:

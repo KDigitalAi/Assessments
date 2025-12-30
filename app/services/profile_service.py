@@ -30,7 +30,7 @@ def ensure_default_test_user() -> Optional[UUID]:
     try:
         client = supabase_service.get_client()
         if not client:
-            logger.error("❌ Supabase client not available. Cannot access test user.")
+            logger.error("Supabase client not available. Cannot access test user.")
             return None
         
         # Step 1: Check if test user already exists by email
@@ -45,7 +45,7 @@ def ensure_default_test_user() -> Optional[UUID]:
                 profile_id = test_user_response.data[0].get("id")
                 return UUID(profile_id) if profile_id else None
         except Exception as e:
-            logger.warning(f"⚠️  Error checking for test user: {str(e)}")
+            logger.warning(f"Error checking for test user: {str(e)}")
         
         # Step 2: Test user doesn't exist - try to create it
         
@@ -129,7 +129,7 @@ def ensure_default_test_user() -> Optional[UUID]:
                 
                 # If we still don't have auth_user_id, provide clear instructions
                 if not auth_user_id:
-                    logger.warning("⚠️  Profiles table is empty. Cannot auto-create profile without auth.user ID.")
+                    logger.warning("Profiles table is empty. Cannot auto-create profile without auth.user ID.")
                     logger.warning("   SOLUTION: Run this SQL in Supabase SQL Editor (SQL Editor > New Query):")
                     logger.warning("")
                     logger.warning("   INSERT INTO profiles (id, email, full_name, role, organization)")
@@ -182,10 +182,10 @@ def ensure_default_test_user() -> Optional[UUID]:
                     
                     if verify_response.data and len(verify_response.data) > 0:
                         profile_data = verify_response.data[0]
-                        success_msg = f"✅ Default test user created successfully in Supabase"
+                        success_msg = f"Default test user created successfully in Supabase"
                         return profile_id
                     else:
-                        logger.error("❌ Profile created but verification failed - profile not found in database")
+                        logger.error("Profile created but verification failed - profile not found in database")
                         return None
                         
             except Exception as insert_error:
@@ -200,12 +200,12 @@ def ensure_default_test_user() -> Optional[UUID]:
                             .execute()
                         if test_user_response.data and len(test_user_response.data) > 0:
                             profile_id = test_user_response.data[0].get("id")
-                            success_msg = f"✅ Test user already exists in Supabase: {TEST_USER_EMAIL}"
+                            success_msg = f"Test user already exists in Supabase: {TEST_USER_EMAIL}"
                             return UUID(profile_id) if profile_id else None
                     except Exception:
                         pass
                 
-                logger.error(f"❌ Could not create test user: {str(insert_error)}")
+                logger.error(f"Could not create test user: {str(insert_error)}")
                 logger.error(f"   Error details: {type(insert_error).__name__}: {insert_error}")
                 # Fall through to use existing profile as fallback
         except Exception as create_error:
@@ -217,14 +217,14 @@ def ensure_default_test_user() -> Optional[UUID]:
             existing_profiles = client.table("profiles").select("id").limit(1).execute()
             if existing_profiles.data and len(existing_profiles.data) > 0:
                 profile_id = existing_profiles.data[0].get("id")
-                logger.warning(f"⚠️  Using existing profile as fallback: {profile_id}")
+                logger.warning(f"Using existing profile as fallback: {profile_id}")
                 logger.warning(f"   Could not create test user. Please ensure auth.users has at least one user.")
                 return UUID(profile_id) if profile_id else None
         except Exception as e:
-            logger.error(f"❌ Could not get any existing profile: {str(e)}")
+            logger.error(f"Could not get any existing profile: {str(e)}")
         
         # All strategies failed
-        logger.error("❌ Failed to create or find test user profile")
+        logger.error("Failed to create or find test user profile")
         logger.error("   SOLUTION: Run this SQL in Supabase SQL Editor:")
         logger.error("   INSERT INTO profiles (id, email, full_name, role, organization)")
         logger.error("   SELECT id, 'test_user@skillcapital.ai', 'Skill Capital Test User', 'student', 'Skill Capital'")
@@ -233,7 +233,7 @@ def ensure_default_test_user() -> Optional[UUID]:
         return None
         
     except Exception as e:
-        logger.error(f"❌ Error in ensure_default_test_user: {str(e)}")
+        logger.error(f"Error in ensure_default_test_user: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
         return None

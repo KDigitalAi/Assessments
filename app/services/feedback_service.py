@@ -52,6 +52,7 @@ class FeedbackService:
         Returns:
             Personalized feedback message
         """
+        logger.debug(f"Starting feedback generation (score: {score}/{max_score}, percentage: {percentage:.1f}%, skill: {skill_domain})")
         # Analyze topic-wise performance if results are available
         topic_analysis = self._analyze_topic_performance(results)
         
@@ -145,23 +146,41 @@ Requirements:
 
 Generate only the feedback message, no additional text:"""
 
-            response = self.client.chat.completions.create(
-                model=settings.OPENAI_MODEL,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a supportive and encouraging educational assistant. Generate personalized, positive feedback for students based on their assessment performance. Always maintain an uplifting and motivational tone."
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                temperature=0.7,
-                max_tokens=200
-            )
-            
-            feedback = response.choices[0].message.content.strip()
+            logger.debug(f"Generating feedback using OpenAI API (score: {score}/{max_score}, percentage: {percentage:.1f}%)")
+            try:
+                response = self.client.chat.completions.create(
+                    model=settings.OPENAI_MODEL,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a supportive and encouraging educational assistant. Generate personalized, positive feedback for students based on their assessment performance. Always maintain an uplifting and motivational tone."
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    temperature=0.7,
+                    max_tokens=200,
+                    timeout=60.0  # 60 second timeout for API call
+                )
+                
+                if not response.choices or len(response.choices) == 0:
+                    logger.warning("OpenAI API returned no choices in response")
+                    return None
+                
+                if not response.choices[0].message or not response.choices[0].message.content:
+                    logger.warning("OpenAI API returned empty message content")
+                    return None
+                
+                feedback = response.choices[0].message.content.strip()
+                logger.debug("Feedback generated successfully")
+            except TimeoutError as e:
+                logger.error(f"OpenAI API call timed out after 60 seconds for feedback generation: {str(e)}")
+                return None
+            except Exception as e:
+                logger.exception(f"OpenAI API call failed for feedback generation: {str(e)}")
+                return None
             
             # Clean up feedback (remove quotes if present)
             if feedback.startswith('"') and feedback.endswith('"'):

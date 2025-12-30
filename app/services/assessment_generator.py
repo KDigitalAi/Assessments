@@ -5,7 +5,7 @@ Reads pdf_embeddings, generates questions, and creates assessments
 
 from typing import List, Dict, Any, Optional
 from uuid import UUID, uuid4
-from datetime import datetime
+from datetime import datetime, timezone
 from app.services.supabase_service import supabase_service
 from app.services.topic_question_service import topic_question_service
 from app.utils.logger import logger
@@ -47,12 +47,11 @@ class AssessmentGenerator:
             
             # Get distinct document IDs and names
             # Note: Actual column names are pdf_id and pdf_title (not document_id/document_name)
-            logger.info("Querying pdf_embeddings table...")
+            logger.info("Starting PDF source retrieval from pdf_embeddings table...")
             response = self.client.table("pdf_embeddings")\
                 .select("pdf_id, pdf_title")\
                 .execute()
-            
-            logger.info(f"PDF embeddings query returned {len(response.data) if response.data else 0} rows")
+            logger.debug(f"PDF embeddings query returned {len(response.data) if response.data else 0} rows")
             
             if not response.data:
                 logger.warning("No data in pdf_embeddings table")
@@ -730,7 +729,7 @@ class AssessmentGenerator:
                 "status": "published",
                 "blueprint": json.dumps(blueprint),
                 "created_by": None,  # System-generated assessment
-                "published_at": datetime.utcnow().isoformat()
+                "published_at": datetime.now(timezone.utc).isoformat()
             }
             
             # Add course_id if provided
@@ -738,15 +737,16 @@ class AssessmentGenerator:
                 assessment_data["course_id"] = course_id
             
             logger.info(f"Inserting assessment: {assessment_data.get('title')}")
+            logger.debug(f"Assessment data: topic={topic}, question_count={question_count}, course_id={course_id}")
             response = self.client.table("assessments").insert(assessment_data).execute()
             
-            if response.data:
+            if response.data and len(response.data) > 0:
                 assessment = response.data[0]
                 assessment_id = assessment.get('id')
-                logger.info(f"✅ Created assessment: {assessment_id} for topic: {topic}")
+                logger.info(f"Created assessment: {assessment_id} for topic: {topic}")
                 return assessment
             else:
-                logger.error(f"❌ Assessment insert response has no data")
+                logger.error(f"Assessment insert response has no data")
                 logger.error(f"   Assessment data: {assessment_data}")
                 return None
             

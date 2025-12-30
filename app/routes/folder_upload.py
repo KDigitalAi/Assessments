@@ -49,7 +49,7 @@ async def upload_folder(
                 detail="No PDF files provided"
             )
         
-        logger.info(f"📁 Uploading course folder: {course_name} with {len(pdf_files)} PDF file(s)")
+        logger.info(f"Uploading course folder: {course_name} with {len(pdf_files)} PDF file(s)")
         
         # Create course folder in uploads directory
         uploads_dir = Path("app/uploads")
@@ -59,24 +59,27 @@ async def upload_folder(
         course_folder.mkdir(parents=True, exist_ok=True)
         
         # Save PDF files to course folder
+        logger.info(f"Saving {len(pdf_files)} PDF file(s) to course folder: {course_name}")
         uploaded_files = []
         for pdf_file in pdf_files:
             file_path = course_folder / pdf_file.filename
             try:
+                logger.debug(f"Saving file: {pdf_file.filename} to {file_path}")
                 with open(file_path, 'wb') as f:
                     content = await pdf_file.read()
                     f.write(content)
                 uploaded_files.append(file_path)
-                logger.info(f"  ✅ Saved: {pdf_file.filename}")
+                logger.info(f"  Saved: {pdf_file.filename}")
             except Exception as e:
-                logger.error(f"  ❌ Error saving {pdf_file.filename}: {str(e)}")
+                logger.error(f"  Error saving {pdf_file.filename}: {str(e)}")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"Error saving file {pdf_file.filename}: {str(e)}"
                 )
         
         # Process the course folder
-        logger.info(f"🔄 Processing course folder: {course_name}")
+        logger.info(f"Starting course folder processing: {course_name}")
+        logger.debug(f"Course folder path: {course_folder}, PDFs uploaded: {len(uploaded_files)}")
         result = folder_processor.process_course_folder(course_folder)
         
         if not result.get("success"):
@@ -124,7 +127,7 @@ async def process_all_folders():
         Overall processing results
     """
     try:
-        logger.info("🔄 Processing all course folders in app/uploads/")
+        logger.info("Processing all course folders in app/uploads/")
         
         result = folder_processor.process_all_folders()
         

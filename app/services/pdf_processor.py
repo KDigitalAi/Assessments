@@ -59,6 +59,7 @@ class PDFProcessor:
         if not PDF_LIBRARY_AVAILABLE:
             raise ImportError("PyPDF2 is required for PDF processing. Install with: pip install PyPDF2")
         
+        logger.info(f"Starting PDF text extraction: {pdf_file_path if isinstance(pdf_file_path, str) else 'file-like object'}")
         pages = []
         
         try:
@@ -127,6 +128,8 @@ class PDFProcessor:
         """
         if not text or not text.strip():
             return
+        
+        logger.debug(f"Starting text chunking: text_length={len(text)}, chunk_size={chunk_size}, overlap={overlap}")
         
         # If text is shorter than chunk_size, yield once and return
         if len(text) <= chunk_size:
@@ -416,11 +419,13 @@ class PDFProcessor:
         logger.info(f"Generating embeddings for {len(chunk_texts)} chunks in batches of {batch_size}...")
         
         try:
+            logger.debug(f"Starting batch embedding generation for {len(chunk_texts)} chunks")
             # Generate all embeddings in batches
             embeddings = embedding_service.generate_embeddings_batch(
                 texts=chunk_texts,
                 batch_size=batch_size
             )
+            logger.debug(f"Batch embedding generation completed: {len(embeddings)} embeddings generated")
             
             # Map embeddings back to chunks
             chunks_with_embeddings = []
@@ -434,8 +439,11 @@ class PDFProcessor:
             logger.info(f"[OK] Successfully generated {len(chunks_with_embeddings)} embeddings from {len(chunk_texts)} chunks")
             return chunks_with_embeddings
             
+        except TimeoutError as e:
+            logger.error(f"Batch embedding generation timed out: {str(e)}")
+            raise
         except Exception as e:
-            logger.error(f"Error in batch embedding generation: {str(e)}", exc_info=True)
+            logger.exception(f"Error in batch embedding generation: {str(e)}")
             # Fallback: Try individual generation for remaining chunks
             logger.warning("Falling back to individual embedding generation...")
             chunks_with_embeddings = []

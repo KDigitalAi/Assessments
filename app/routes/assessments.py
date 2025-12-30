@@ -139,7 +139,7 @@ async def sync_embeddings():
         total_sources = result.get("total_sources", 0)
         failed_count = result.get("failed", 0)
         
-        logger.info(f"✅ Embeddings sync completed: {generated_count} assessments generated from {total_sources} sources")
+        logger.info(f"Embeddings sync completed: {generated_count} assessments generated from {total_sources} sources")
         
         return {
             "success": True,

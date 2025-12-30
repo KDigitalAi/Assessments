@@ -228,17 +228,17 @@ async def health_check():
                 # Test connection with a simple query
                 _ = client.table("profiles").select("id").limit(0).execute()
                 supabase_status = "connected"
-                supabase_test = "✅ Connection successful"
+                supabase_test = "Connection successful"
             except Exception as test_error:
                 error_msg = str(test_error).lower()
                 if "does not exist" in error_msg or "relation" in error_msg:
                     supabase_status = "connected"
-                    supabase_test = "⚠️ Connected but tables may not exist"
+                    supabase_test = "Connected but tables may not exist"
                 else:
                     supabase_status = "error"
-                    supabase_test = f"❌ Connection test failed: {str(test_error)[:100]}"
+                    supabase_test = f"Connection test failed: {str(test_error)[:100]}"
         else:
-            supabase_test = "❌ Client not initialized - check credentials"
+            supabase_test = "Client not initialized - check credentials"
         
         # Check cache status
         cache_stats = cache.stats()

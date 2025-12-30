@@ -38,8 +38,10 @@ async def upload_pdf(
             )
         
         # Read file content
+        logger.info(f"Reading PDF file: {file.filename}")
         file_content = await file.read()
         file_size = len(file_content)
+        logger.debug(f"File read completed: {file_size} bytes")
         
         # Generate unique PDF ID
         pdf_id = str(uuid.uuid4())
@@ -57,6 +59,7 @@ async def upload_pdf(
         
         # Upload file to storage bucket 'pdfs'
         storage_path = f"{pdf_id}/{file.filename}"
+        logger.info(f"Uploading file to Supabase Storage: {storage_path}")
         try:
             storage_response = client.storage.from_("pdfs").upload(
                 path=storage_path,
@@ -80,6 +83,7 @@ async def upload_pdf(
             "status": "uploaded"
         }
         
+        logger.debug(f"Creating pdf_documents record for PDF: {pdf_id}")
         try:
             doc_response = client.table("pdf_documents").insert(pdf_doc_data).execute()
             if not doc_response.data:
@@ -89,8 +93,9 @@ async def upload_pdf(
             # Try to clean up storage
             try:
                 client.storage.from_("pdfs").remove([storage_path])
-            except:
-                pass
+                logger.debug(f"Cleaned up storage file: {storage_path}")
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to clean up storage file {storage_path}: {str(cleanup_error)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to create document record: {str(e)}"
@@ -112,14 +117,24 @@ async def upload_pdf(
         # In production, use a task queue (Celery, etc.)
         # For now, we'll process synchronously
         try:
+            logger.info(f"Starting background processing for PDF: {pdf_id}")
             await process_pdf_background(pdf_id, file_content)
+            logger.info(f"Background processing completed successfully for PDF: {pdf_id}")
         except Exception as e:
-            logger.error(f"Error processing PDF: {str(e)}")
+            logger.exception(f"Background PDF processing failed for PDF {pdf_id}: {str(e)}")
             # Update status to error
-            client.table("pdf_documents").update({
-                "status": "error",
-                "error_message": str(e)
-            }).eq("id", pdf_id).execute()
+            try:
+                client.table("pdf_documents").update({
+                    "status": "error",
+                    "error_message": str(e)
+                }).eq("id", pdf_id).execute()
+            except Exception as update_error:
+                logger.error(f"Failed to update PDF status to error: {str(update_error)}")
+            # Re-raise to ensure caller knows processing failed
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"PDF processing failed: {str(e)}"
+            )
         
         return {
             "success": True,
@@ -157,7 +172,11 @@ async def process_pdf_background(pdf_id: str, file_content: bytes):
         
         # Get PDF title
         pdf_doc = client.table("pdf_documents").select("title").eq("id", pdf_id).execute()
-        pdf_title = pdf_doc.data[0]["title"] if pdf_doc.data else f"PDF {pdf_id[:8]}"
+        if not pdf_doc.data or len(pdf_doc.data) == 0:
+            logger.error(f"PDF metadata not found for pdf_id: {pdf_id}")
+            raise ValueError(f"Invalid pdf_id: {pdf_id}")
+        
+        pdf_title = pdf_doc.data[0]["title"]
         
         # Extract text from PDF
         import io
@@ -193,7 +212,7 @@ async def process_pdf_background(pdf_id: str, file_content: bytes):
         client.table("pdf_documents").update({"status": "processed"}).eq("id", pdf_id).execute()
         pdf_processor.update_processing_log(pdf_id, "completed", chunks_created=len(chunks_with_embeddings))
         
-        logger.info(f"✅ Successfully processed PDF {pdf_id}: {len(chunks_with_embeddings)} chunks")
+        logger.info(f"Successfully processed PDF {pdf_id}: {len(chunks_with_embeddings)} chunks")
         
     except Exception as e:
         logger.error(f"Error processing PDF {pdf_id}: {str(e)}")
@@ -262,11 +281,14 @@ async def get_pdf_status(pdf_id: str):
             .eq("id", pdf_id)\
             .execute()
         
-        if not pdf_response.data:
+        if not pdf_response.data or len(pdf_response.data) == 0:
+            logger.warning(f"PDF not found: {pdf_id}")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="PDF not found"
             )
+        
+        logger.debug(f"Retrieved PDF data for pdf_id: {pdf_id}")
         
         # Get processing log
         log_response = client.table("pdf_processing_log")\
@@ -277,7 +299,7 @@ async def get_pdf_status(pdf_id: str):
         return {
             "success": True,
             "pdf": pdf_response.data[0],
-            "processing_log": log_response.data[0] if log_response.data else None
+            "processing_log": log_response.data[0] if log_response.data and len(log_response.data) > 0 else None
         }
         
     except HTTPException:
