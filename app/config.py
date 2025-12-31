@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     
     # API Configuration
     API_V1_PREFIX: str = "/api/v1"
-    PROJECT_NAME: str = "Skill Capital AI Learning Platform"
+    PROJECT_NAME: str = "Edify AI Learning Platform"
     VERSION: str = "1.0.0"
     
     # Supabase Configuration
@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     # Application Settings
     DEBUG: bool = True  # Default to True for development (set to False for production)
     # CORS origins - includes localhost for dev and Vercel domains for production
-    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173,http://localhost:5174,http://localhost:5176,http://localhost:8000,http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:5176,https://skillcapital.ai,https://assessments-gray.vercel.app,https://*.vercel.app"
+    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173,http://localhost:5174,http://localhost:5176,http://localhost:8000,http://127.0.0.1:5173,http://127.0.0.1:5174,http://127.0.0.1:5176,https://skillcapital.ai,https://assessments-gray.vercel.app,https://*.vercel.app,https://enterprise.digitaledify.ai/"
     
     # Question Generation Defaults
     DEFAULT_QUESTION_COUNT: int = 10
