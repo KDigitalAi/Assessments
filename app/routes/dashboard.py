@@ -207,8 +207,9 @@ async def get_assessments():
         
         return {
             "success": True,
-            "assessments": formatted_assessments,  # For backward compatibility
-            "courses": formatted_courses  # New format with unique source counts
+            # "assessments": formatted_assessments,  <-- REMOVED per contract update
+            "courses": formatted_courses,  # Primary source of truth
+            "total_courses": len(formatted_courses)
         }
         
     except HTTPException:
@@ -420,16 +421,14 @@ async def get_assessments_by_course(course_id: str):
     """
     Get assessments filtered by course_id (STRICT ISOLATION)
     
-    This endpoint ensures:
-    - Only assessments belonging to the specified course are returned
-    - No assessments from other courses are included
-    - Course isolation is strictly enforced
+    Returns a scoped course object containing ONLY this course's assessments.
+    Prevents data leakage of global assessments.
     
     Args:
         course_id: Course UUID
     
     Returns:
-        List of assessments for the specified course ONLY
+        Object with success boolean and course details
     """
     try:
         client = supabase_service.get_client()
@@ -453,7 +452,8 @@ async def get_assessments_by_course(course_id: str):
                 detail=f"Course not found: {course_id}"
             )
         
-        course_name = course_response.data[0].get("name", "Course")
+        course_data = course_response.data[0]
+        course_name = course_data.get("name", "Course")
         logger.debug(f"Retrieved course: {course_name} (ID: {course_id})")
         
         # Get assessments by course_id ONLY (strict filtering)
@@ -484,21 +484,14 @@ async def get_assessments_by_course(course_id: str):
         
         # Normalize assessment title function (for deduplication)
         def normalize_assessment_title(raw_title: str) -> str:
-            """Normalize assessment title to avoid duplicates.
-            
-            Handles:
-            - Removes .pdf anywhere in the title
-            - Replaces underscores and hyphens with spaces
-            - Removes double spaces
-            - Converts to title case
-            """
+            """Normalize assessment title to avoid duplicates."""
             if not raw_title or not isinstance(raw_title, str):
                 return "Untitled Assessment"
             
             # Convert to lowercase and trim
             title = raw_title.strip().lower()
             
-            # Remove .pdf anywhere in the title (not just at the end)
+            # Remove .pdf anywhere in the title
             title = title.replace('.pdf', '')
             
             # Replace underscores and hyphens with spaces
@@ -507,7 +500,7 @@ async def get_assessments_by_course(course_id: str):
             # Remove double spaces and trim
             title = " ".join(title.split())
             
-            # Remove standalone "pdf" word (e.g., "html pdf assessment" -> "html assessment")
+            # Remove standalone "pdf" word
             words = title.split()
             words = [word for word in words if word != 'pdf']
             title = " ".join(words)
@@ -515,13 +508,13 @@ async def get_assessments_by_course(course_id: str):
             if not title:
                 return "Untitled Assessment"
             
-            # Convert to title case (capitalize each word)
+            # Convert to title case
             words = title.split()
             normalized_words = [word.capitalize() for word in words]
             
             return " ".join(normalized_words)
         
-        # Format assessments for frontend (normalize skill_domain and deduplicate by title)
+        # Format assessments for frontend
         formatted_assessments = []
         seen_titles = {}  # Track normalized titles to avoid duplicates
         
@@ -534,7 +527,7 @@ async def get_assessments_by_course(course_id: str):
             raw_title = assessment.get("title") or assessment.get("assessment_title") or "Untitled Assessment"
             normalized_title = normalize_assessment_title(raw_title)
             
-            # Create a unique key for deduplication (normalized title + skill_domain)
+            # Create a unique key for deduplication
             title_key = normalized_title.lower()
             
             # Skip if we've already seen this normalized title for this course
@@ -553,14 +546,23 @@ async def get_assessments_by_course(course_id: str):
                 "description": assessment.get("description"),
                 "question_count": assessment.get("question_count", 10),
                 "duration_minutes": assessment.get("duration_minutes", 30),
-                "difficulty": assessment.get("difficulty", "medium")
+                "difficulty": assessment.get("difficulty", "medium"),
+                "status": assessment.get("status", "published"),
+                "published_at": assessment.get("created_at")
             })
         
+        # Return new scoped structure
         return {
             "success": True,
-            "course_name": course_name,
-            "assessments": formatted_assessments,
-            "total": len(formatted_assessments)
+            "course": {
+                "id": course_id,
+                "name": course_name,
+                "skill_domain": course_name,  # Alias
+                "skill_name": course_name,    # Alias
+                "test_count": len(formatted_assessments),
+                "progress": 0,  # Placeholder as per current backend capability
+                "assessments": formatted_assessments
+            }
         }
         
     except HTTPException:

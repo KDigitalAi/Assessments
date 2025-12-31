@@ -397,13 +397,21 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 - **Development**: `http://localhost:8000`
 - **Production**: `https://your-backend-api.vercel.app`
 
-### Authentication
+### Authentication & Session Isolation
 
-All authenticated endpoints require a Bearer token in the Authorization header:
+The API supports two modes of user identification:
 
-```http
-Authorization: Bearer {access_token}
-```
+1. **Authenticated Mode (JWT)**:
+   Requires a Bearer token in the Authorization header.
+   ```http
+   Authorization: Bearer {access_token}
+   ```
+
+2. **Session Mode (Anonymous)**:
+   For users without accounts, use the `X-Session-Id` header to isolate data (progress, attempts, etc.).
+   ```http
+   X-Session-Id: {unique_session_string}
+   ```
 
 ---
 
@@ -501,27 +509,27 @@ Authorization: Bearer {access_token}
 ```
 
 **Response:**
+**Response:**
 ```json
 {
   "success": true,
-  "assessments": [
-    {
-      "id": "uuid",
-      "title": "Python Fundamentals",
-      "course_id": "uuid",
-      "course_name": "Python",
-      "difficulty": "medium",
-      "question_count": 10,
-      "status": "published"
-    }
-  ],
   "courses": [
     {
       "id": "uuid",
       "name": "Python",
-      "assessment_count": 5
+      "assessment_count": 5,
+      "assessments": [
+        {
+          "id": "uuid",
+          "title": "Python Fundamentals",
+          "difficulty": "medium",
+          "question_count": 10,
+          "status": "published"
+        }
+      ]
     }
-  ]
+  ],
+  "total_courses": 1
 }
 ```
 
@@ -538,6 +546,7 @@ Get user progress statistics and recent assessments.
 **Headers:**
 ```http
 Authorization: Bearer {access_token}
+X-Session-Id: {session_id} (optional)
 ```
 
 **Response:**
@@ -614,21 +623,23 @@ Authorization: Bearer {access_token}
 ```
 
 **Response:**
+**Response:**
 ```json
 {
   "success": true,
   "course": {
     "id": "uuid",
-    "name": "Python"
-  },
-  "assessments": [
-    {
-      "id": "uuid",
-      "title": "Python Fundamentals",
-      "difficulty": "medium",
-      "question_count": 10
-    }
-  ]
+    "name": "Python",
+    "test_count": 5,
+    "assessments": [
+      {
+        "id": "uuid",
+        "title": "Python Fundamentals",
+        "difficulty": "medium",
+        "question_count": 10
+      }
+    ]
+  }
 }
 ```
 
@@ -648,9 +659,10 @@ Get questions for an assessment and create an attempt.
 **Path Parameters:**
 - `assessment_id` (string, required): Assessment UUID
 
-**Headers:** (Optional - attempt will be created if authenticated)
+**Headers:** (Optional - attempt will be created if authenticated or session_id provided)
 ```http
 Authorization: Bearer {access_token}
+X-Session-Id: {session_id} (optional)
 ```
 
 **Response:**
@@ -684,6 +696,11 @@ Authorization: Bearer {access_token}
 ### POST /api/startAssessment
 
 Start an assessment with dynamic question generation (legacy endpoint).
+
+**Headers:**
+```http
+X-Session-Id: {session_id} (optional)
+```
 
 **Request:**
 ```json
