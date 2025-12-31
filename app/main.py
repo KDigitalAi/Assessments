@@ -135,7 +135,7 @@ EDIFY_FRONTEND_ORIGINS = [
     "http://localhost:3000",  # Local development
     "http://localhost:5173",  # Vite dev server
     "http://localhost:8080",
-    "https://enterprise.digitaledify.ai/",
+    "https://enterprise.digitaledify.ai",
     "https://edify-enterprise-web-app-git-dev-tech-kdigitalais-projects.vercel.app/",  # Common dev port
 ]
 
