@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS profiles (
     full_name TEXT,
     role TEXT DEFAULT 'user' CHECK (role IN ('user', 'admin', 'student')),
     organization TEXT,
+    session_id TEXT, -- Temporary session ID for isolation before full auth
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -43,6 +44,23 @@ COMMENT ON TABLE profiles IS 'User profiles for Assessment system';
 
 CREATE INDEX IF NOT EXISTS idx_profiles_email ON profiles(email);
 CREATE INDEX IF NOT EXISTS idx_profiles_role ON profiles(role);
+
+-- Migration: Add session_id column if it doesn't exist (for existing databases)
+DO $$ 
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 
+        FROM information_schema.columns 
+        WHERE table_schema = 'public'
+        AND table_name = 'profiles' 
+        AND column_name = 'session_id'
+    ) THEN
+        ALTER TABLE profiles ADD COLUMN session_id TEXT;
+        COMMENT ON COLUMN profiles.session_id IS 'Temporary session ID for isolation before full auth';
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_profiles_session_id ON profiles(session_id);
 
 -- ===================================================================
 -- TABLE 2: courses

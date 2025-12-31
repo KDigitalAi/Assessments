@@ -3,7 +3,7 @@ Unified Dashboard API endpoints for Skill Assessment
 API-only backend service - Frontend handled by Edify team
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from typing import List, Optional, Dict, Any
 from uuid import UUID
 from datetime import datetime, timedelta, timezone
@@ -574,9 +574,16 @@ async def get_assessments_by_course(course_id: str):
 
 
 @router.get("/assessments/{assessment_id}/questions")
-async def get_assessment_questions(assessment_id: str):
+async def get_assessment_questions(
+    assessment_id: str,
+    x_session_id: Optional[str] = Header(None, alias="X-Session-Id")
+):
     """
     Get questions for a specific assessment by assessment ID
+    
+    Args:
+        assessment_id: Assessment ID
+        x_session_id: Optional Session ID for user isolation
     
     Returns questions from the assessment's blueprint or topic
     """
@@ -675,7 +682,8 @@ async def get_assessment_questions(assessment_id: str):
             system_user_id = None
             try:
                 # Get the test user - this will create it if it doesn't exist
-                test_user_id = get_test_user_id()
+                # Pass session_id to isolate this user if provided
+                test_user_id = get_test_user_id(session_id=x_session_id)
                 if test_user_id:
                     system_user_id = str(test_user_id)
                 else:
@@ -775,7 +783,8 @@ async def get_assessment_questions(assessment_id: str):
 
 @router.post("/startAssessment")
 async def start_assessment(
-    request: StartAssessmentRequest
+    request: StartAssessmentRequest,
+    x_session_id: Optional[str] = Header(None, alias="X-Session-Id")
 ):
     """
     Start an assessment and generate/fetch questions using existing embeddings
@@ -892,7 +901,8 @@ async def start_assessment(
         system_user_id = None
         try:
             # Get the test user - this will create it if it doesn't exist
-            test_user_id = get_test_user_id()
+            # Pass session_id to isolate this user if provided
+            test_user_id = get_test_user_id(session_id=x_session_id)
             if test_user_id:
                 system_user_id = str(test_user_id)
             else:
@@ -1367,7 +1377,9 @@ async def get_attempt_result(attempt_id: str):
 
 
 @router.get("/getProgress")
-async def get_progress():
+async def get_progress(
+    x_session_id: Optional[str] = Header(None, alias="X-Session-Id")
+):
     """
     Get user's progress, stats, and recent assessments
     """
@@ -1381,7 +1393,7 @@ async def get_progress():
         
         # Get test user ID for filtering (if available)
         from app.services.profile_service import get_test_user_id
-        test_user_id = get_test_user_id()
+        test_user_id = get_test_user_id(session_id=x_session_id)
         
         # Build query - filter by test user if available, otherwise get all completed attempts
         query = client.table("attempts")\

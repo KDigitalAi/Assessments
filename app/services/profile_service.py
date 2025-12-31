@@ -1,5 +1,5 @@
 """
-Service for managing user profiles - simplified for single test user
+Service for managing user profiles - supports both test user and temporary sessions
 """
 
 from typing import Optional
@@ -12,26 +12,105 @@ TEST_USER_EMAIL = "test_user@skillcapital.ai"
 TEST_USER_NAME = "Skill Capital Test User"
 TEST_USER_ROLE = "student"
 
+# Session-based user defaults
+SESSION_USER_ROLE = "student"
+SESSION_USER_ORG = "Guest Session"
 
-def ensure_default_test_user() -> Optional[UUID]:
+
+def ensure_default_test_user(session_id: Optional[str] = None) -> Optional[UUID]:
     """
-    Ensure the single default test user profile exists in the database.
-    This is the ONLY user used for all Skill Assessment operations.
+    Ensure a user profile exists.
     
-    Strategy:
-    1. Check for test user by email (test_user@skillcapital.ai)
+    If session_id is provided:
+    1. Check for existing profile with this session_id
+    2. If not found, create a new profile linked to this session_id
+    
+    If no session_id (Legacy Mode):
+    1. Check for test user (test_user@skillcapital.ai) by email
     2. If found, return its UUID
     3. If not found, try to create it using an existing auth.user ID
     4. If creation fails, try to use any existing profile as fallback
     
+    Args:
+        session_id: Optional temporary session ID for isolation
+    
     Returns:
-        UUID of the test user profile, or None if creation failed
+        UUID of the user profile, or None if creation failed
     """
     try:
         client = supabase_service.get_client()
         if not client:
-            logger.error("Supabase client not available. Cannot access test user.")
+            logger.error("Supabase client not available. Cannot access user profile.")
             return None
+            
+        # =========================================================
+        # PATH A: SESSION-BASED ISOLATION (New Behavior)
+        # =========================================================
+        if session_id:
+            logger.info(f"Using Session ID: {session_id}")
+            
+            # 1. Try to find existing profile for this session
+            try:
+                # Optimized query for session lookup
+                session_response = client.table("profiles")\
+                    .select("id")\
+                    .eq("session_id", session_id)\
+                    .limit(1)\
+                    .execute()
+                
+                if session_response.data and len(session_response.data) > 0:
+                    profile_id = session_response.data[0].get("id")
+                    logger.debug(f"Found existing profile {profile_id} for session {session_id}")
+                    return UUID(profile_id) if profile_id else None
+            except Exception as e:
+                logger.warning(f"Error checking for session user: {str(e)}")
+                # If error is about missing column, fall through to legacy path
+                if "column" in str(e).lower() and "session_id" in str(e).lower():
+                    logger.error("Create session_id column in database to use session isolation.")
+                    # Continue to legacy path
+                else:
+                    # Generic error - try creation
+                    pass
+            
+            # 2. Create new profile for this session
+            try:
+                # Need to create a new Auth User to satisfy FK constraint
+                service_client = supabase_service.get_client(use_service_key=True)
+                if service_client:
+                    # Create a dummy email for the session
+                    session_email = f"session_{session_id}@temp.skillcapital.ai"
+                    try:
+                         # Try to create auth user
+                        auth_response = service_client.auth.admin.create_user({
+                            "email": session_email,
+                            "email_confirm": True,
+                            "user_metadata": {"full_name": "Guest Session"}
+                        })
+                        if auth_response and auth_response.user:
+                             auth_user_id = auth_response.user.id
+                             
+                             # Now create the profile
+                             profile_data = {
+                                 "id": str(auth_user_id),
+                                 "email": session_email,
+                                 "full_name": f"Guest {session_id[:6]}",
+                                 "role": SESSION_USER_ROLE,
+                                 "organization": SESSION_USER_ORG,
+                                 "session_id": session_id
+                             }
+                             
+                             client.table("profiles").insert(profile_data).execute()
+                             logger.info(f"Created new session profile for {session_id}")
+                             return UUID(auth_user_id)
+                    except Exception as auth_error:
+                         logger.warning(f"Failed to create auth user for session: {auth_error}")
+                         # Fallback will occur below
+            except Exception as e:
+                logger.error(f"Error creating session user: {str(e)}")
+
+        # =========================================================
+        # PATH B: LEGACY TEST USER (Original Behavior)
+        # =========================================================
         
         # Step 1: Check if test user already exists by email
         try:
@@ -239,15 +318,18 @@ def ensure_default_test_user() -> Optional[UUID]:
         return None
 
 
-def get_test_user_id() -> Optional[UUID]:
+def get_test_user_id(session_id: Optional[str] = None) -> Optional[UUID]:
     """
-    Get the test user ID - always returns the same test user.
+    Get the user user ID - either the session-specific user or the default test user.
     This is the main function used throughout the application.
     
+    Args:
+        session_id: Optional session ID from request header
+        
     Returns:
-        UUID of the test user profile
+        UUID of the user profile
     """
-    return ensure_default_test_user()
+    return ensure_default_test_user(session_id)
 
 
 def get_or_create_default_user() -> Optional[UUID]:
