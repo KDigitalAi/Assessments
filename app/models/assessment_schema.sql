@@ -1,73 +1,111 @@
 -- ===================================================================
--- ASSESSMENT PROJECT DATABASE SCHEMA
+-- ASSESSMENT PROJECT DATABASE SCHEMA (RENAMED TABLES MIGRATION)
 -- ===================================================================
--- Self-contained Assessment System - PDF Only
--- Separate Supabase Database
--- 
--- This schema creates exactly 10 tables:
---   7 Core Assessment Tables
---   3 PDF/RAG Tables
--- 
--- IMPORTANT:
--- - This is a NEW database project (separate from chatbot/RAG)
--- - PDF-only (no video, no chatbot features)
--- - Run this in your NEW Supabase project SQL Editor
+-- Safe migration goals:
+-- 1) Drop unused table: pdf_processing_log
+-- 2) Rename core tables to assessment_* namespace
+-- 3) Preserve data and foreign keys
+-- 4) Keep pdf_documents and pdf_embeddings unchanged
 -- ===================================================================
 
--- ===================================================================
--- EXTENSIONS
--- ===================================================================
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "vector";
 
 -- ===================================================================
--- CORE ASSESSMENT TABLES (7 Tables)
+-- STEP A: DROP UNUSED TABLE SAFELY
 -- ===================================================================
+DROP TABLE IF EXISTS pdf_processing_log CASCADE;
 
 -- ===================================================================
--- TABLE 1: profiles
+-- STEP B: RENAME EXISTING TABLES (SAFE, DATA-PRESERVING)
 -- ===================================================================
--- User profiles linked to Supabase Auth
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='profiles')
+       AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='assessment_profiles') THEN
+        ALTER TABLE profiles RENAME TO assessment_profiles;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='courses')
+       AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='assessment_courses') THEN
+        ALTER TABLE courses RENAME TO assessment_courses;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='assessments')
+       AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='assessment_assessments') THEN
+        ALTER TABLE assessments RENAME TO assessment_assessments;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='skill_assessment_questions')
+       AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='assessment_questions') THEN
+        ALTER TABLE skill_assessment_questions RENAME TO assessment_questions;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='attempts')
+       AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='assessment_attempts') THEN
+        ALTER TABLE attempts RENAME TO assessment_attempts;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='responses')
+       AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='assessment_responses') THEN
+        ALTER TABLE responses RENAME TO assessment_responses;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='results')
+       AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='assessment_results') THEN
+        ALTER TABLE results RENAME TO assessment_results;
+    END IF;
+END $$;
+
 -- ===================================================================
-CREATE TABLE IF NOT EXISTS profiles (
-    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-    email TEXT NOT NULL UNIQUE,
-    full_name TEXT,
-    role TEXT DEFAULT 'user' CHECK (role IN ('user', 'admin', 'student')),
-    organization TEXT,
-    session_id TEXT, -- Temporary session ID for isolation before full auth
+-- STEP C: CREATE TABLES IF FRESH DEPLOYMENT
+-- ===================================================================
+CREATE TABLE IF NOT EXISTS assessment_profiles (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID UNIQUE REFERENCES auth.users(id) ON DELETE SET NULL,
+    session_id TEXT UNIQUE NOT NULL,
+    role TEXT DEFAULT 'student' CHECK (role IN ('student', 'admin')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-COMMENT ON TABLE profiles IS 'User profiles for Assessment system';
-
-CREATE INDEX IF NOT EXISTS idx_profiles_email ON profiles(email);
-CREATE INDEX IF NOT EXISTS idx_profiles_role ON profiles(role);
-
--- Migration: Add session_id column if it doesn't exist (for existing databases)
-DO $$ 
+DO $$
 BEGIN
-    IF NOT EXISTS (
-        SELECT 1 
-        FROM information_schema.columns 
-        WHERE table_schema = 'public'
-        AND table_name = 'profiles' 
-        AND column_name = 'session_id'
+    -- Safe migration from auth-bound profiles to session-first profiles.
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='assessment_profiles' AND column_name='id'
     ) THEN
-        ALTER TABLE profiles ADD COLUMN session_id TEXT;
-        COMMENT ON COLUMN profiles.session_id IS 'Temporary session ID for isolation before full auth';
+        -- If old schema had id -> auth.users, keep IDs/data and add session_id if missing.
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema='public' AND table_name='assessment_profiles' AND column_name='session_id'
+        ) THEN
+            ALTER TABLE assessment_profiles ADD COLUMN session_id TEXT;
+            UPDATE assessment_profiles
+            SET session_id = COALESCE(session_id, 'legacy_' || id::text)
+            WHERE session_id IS NULL;
+            ALTER TABLE assessment_profiles ALTER COLUMN session_id SET NOT NULL;
+        END IF;
+    END IF;
+
+    -- Ensure optional admin-compatible user_id column exists on existing databases.
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='assessment_profiles' AND column_name='user_id'
+    ) THEN
+        ALTER TABLE assessment_profiles ADD COLUMN user_id UUID;
+        BEGIN
+            ALTER TABLE assessment_profiles
+            ADD CONSTRAINT assessment_profiles_user_id_fkey
+            FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+        EXCEPTION WHEN duplicate_object THEN
+            NULL;
+        END;
     END IF;
 END $$;
 
-CREATE INDEX IF NOT EXISTS idx_profiles_session_id ON profiles(session_id);
-
--- ===================================================================
--- TABLE 2: courses
--- ===================================================================
--- Course definitions for grouping assessments
--- ===================================================================
-CREATE TABLE IF NOT EXISTS courses (
+CREATE TABLE IF NOT EXISTS assessment_courses (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name TEXT NOT NULL UNIQUE,
     description TEXT,
@@ -75,16 +113,7 @@ CREATE TABLE IF NOT EXISTS courses (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-COMMENT ON TABLE courses IS 'Course definitions for grouping assessments';
-
-CREATE INDEX IF NOT EXISTS idx_courses_name ON courses(name);
-
--- ===================================================================
--- TABLE 3: assessments
--- ===================================================================
--- Assessment definitions and configurations
--- ===================================================================
-CREATE TABLE IF NOT EXISTS assessments (
+CREATE TABLE IF NOT EXISTS assessment_assessments (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     title TEXT NOT NULL,
     description TEXT,
@@ -94,32 +123,20 @@ CREATE TABLE IF NOT EXISTS assessments (
     duration_minutes INTEGER DEFAULT 60 CHECK (duration_minutes > 0),
     passing_score INTEGER DEFAULT 60 CHECK (passing_score >= 0 AND passing_score <= 100),
     status TEXT DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'archived')),
-    blueprint JSONB, -- Stores assessment configuration and PDF reference
-    course_id UUID REFERENCES courses(id) ON DELETE SET NULL,
-    created_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+    blueprint JSONB,
+    course_id UUID REFERENCES assessment_courses(id) ON DELETE SET NULL,
+    created_by UUID REFERENCES assessment_profiles(id) ON DELETE SET NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     published_at TIMESTAMP WITH TIME ZONE
 );
 
-COMMENT ON TABLE assessments IS 'Assessment definitions for Skill Assessment';
-
-CREATE INDEX IF NOT EXISTS idx_assessments_skill_domain ON assessments(skill_domain);
-CREATE INDEX IF NOT EXISTS idx_assessments_course_id ON assessments(course_id);
-CREATE INDEX IF NOT EXISTS idx_assessments_status ON assessments(status);
-CREATE INDEX IF NOT EXISTS idx_assessments_created_by ON assessments(created_by);
-
--- ===================================================================
--- TABLE 4: skill_assessment_questions
--- ===================================================================
--- Questions generated from PDF embeddings
--- ===================================================================
-CREATE TABLE IF NOT EXISTS skill_assessment_questions (
+CREATE TABLE IF NOT EXISTS assessment_questions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    assessment_id UUID REFERENCES assessments(id) ON DELETE CASCADE,
+    assessment_id UUID REFERENCES assessment_assessments(id) ON DELETE CASCADE,
     topic TEXT NOT NULL,
     question TEXT NOT NULL,
-    options JSONB NOT NULL, -- Array of options for MCQ questions
+    options JSONB NOT NULL,
     correct_answer TEXT NOT NULL,
     explanation TEXT,
     difficulty TEXT DEFAULT 'medium' CHECK (difficulty IN ('easy', 'medium', 'hard')),
@@ -127,49 +144,11 @@ CREATE TABLE IF NOT EXISTS skill_assessment_questions (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-COMMENT ON TABLE skill_assessment_questions IS 'Stores questions generated from PDF embeddings';
-
--- Migration: Add question_type column if it doesn't exist (for existing databases)
-DO $$ 
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 
-        FROM information_schema.columns 
-        WHERE table_schema = 'public'
-        AND table_name = 'skill_assessment_questions' 
-        AND column_name = 'question_type'
-    ) THEN
-        ALTER TABLE skill_assessment_questions 
-        ADD COLUMN question_type TEXT DEFAULT 'theory';
-        
-        IF NOT EXISTS (
-            SELECT 1 
-            FROM information_schema.table_constraints 
-            WHERE table_schema = 'public'
-            AND table_name = 'skill_assessment_questions' 
-            AND constraint_name = 'skill_assessment_questions_question_type_check'
-        ) THEN
-            ALTER TABLE skill_assessment_questions
-            ADD CONSTRAINT skill_assessment_questions_question_type_check 
-            CHECK (question_type IN ('theory', 'coding', 'mcq', 'descriptive'));
-        END IF;
-    END IF;
-END $$;
-
-CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_assessment_id ON skill_assessment_questions(assessment_id);
-CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_topic ON skill_assessment_questions(topic);
-CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_difficulty ON skill_assessment_questions(difficulty);
-CREATE INDEX IF NOT EXISTS idx_skill_assessment_questions_question_type ON skill_assessment_questions(question_type);
-
--- ===================================================================
--- TABLE 5: attempts
--- ===================================================================
--- User attempts for assessments
--- ===================================================================
-CREATE TABLE IF NOT EXISTS attempts (
+CREATE TABLE IF NOT EXISTS assessment_attempts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    assessment_id UUID NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    assessment_id UUID NOT NULL REFERENCES assessment_assessments(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES assessment_profiles(id) ON DELETE SET NULL, -- optional admin compatibility
+    session_id TEXT NOT NULL,
     status TEXT DEFAULT 'in_progress' CHECK (status IN ('in_progress', 'completed', 'abandoned', 'timed_out')),
     started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     completed_at TIMESTAMP WITH TIME ZONE,
@@ -183,24 +162,40 @@ CREATE TABLE IF NOT EXISTS attempts (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-COMMENT ON TABLE attempts IS 'User attempts for assessments';
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='assessment_attempts' AND column_name='user_id'
+    ) THEN
+        ALTER TABLE assessment_attempts ADD COLUMN user_id UUID;
+        BEGIN
+            ALTER TABLE assessment_attempts
+            ADD CONSTRAINT assessment_attempts_user_id_fkey
+            FOREIGN KEY (user_id) REFERENCES assessment_profiles(id) ON DELETE SET NULL;
+        EXCEPTION WHEN duplicate_object THEN
+            NULL;
+        END;
+    END IF;
 
-CREATE INDEX IF NOT EXISTS idx_attempts_assessment_id ON attempts(assessment_id);
-CREATE INDEX IF NOT EXISTS idx_attempts_user_id ON attempts(user_id);
-CREATE INDEX IF NOT EXISTS idx_attempts_status ON attempts(status);
-CREATE INDEX IF NOT EXISTS idx_attempts_created_at ON attempts(created_at);
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='assessment_attempts' AND column_name='session_id'
+    ) THEN
+        ALTER TABLE assessment_attempts ADD COLUMN session_id TEXT;
+        UPDATE assessment_attempts
+        SET session_id = COALESCE(session_id, 'legacy_' || COALESCE(user_id::text, id::text))
+        WHERE session_id IS NULL;
+        ALTER TABLE assessment_attempts ALTER COLUMN session_id SET NOT NULL;
+    END IF;
+END $$;
 
--- ===================================================================
--- TABLE 6: responses
--- ===================================================================
--- Individual question responses in an attempt
--- ===================================================================
-CREATE TABLE IF NOT EXISTS responses (
+CREATE TABLE IF NOT EXISTS assessment_responses (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    attempt_id UUID NOT NULL REFERENCES attempts(id) ON DELETE CASCADE,
-    question_id UUID NOT NULL REFERENCES skill_assessment_questions(id) ON DELETE CASCADE,
-    answer_text TEXT, -- For descriptive/coding questions
-    selected_option TEXT, -- For MCQ questions (A, B, C, D)
+    attempt_id UUID NOT NULL REFERENCES assessment_attempts(id) ON DELETE CASCADE,
+    question_id UUID NOT NULL REFERENCES assessment_questions(id) ON DELETE CASCADE,
+    answer_text TEXT,
+    selected_option TEXT,
     score NUMERIC(10,2) DEFAULT 0,
     max_score NUMERIC(10,2) DEFAULT 1,
     feedback TEXT,
@@ -212,22 +207,12 @@ CREATE TABLE IF NOT EXISTS responses (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-COMMENT ON TABLE responses IS 'Individual question responses in an attempt';
-
-CREATE INDEX IF NOT EXISTS idx_responses_attempt_id ON responses(attempt_id);
-CREATE INDEX IF NOT EXISTS idx_responses_question_id ON responses(question_id);
-CREATE INDEX IF NOT EXISTS idx_responses_status ON responses(status);
-
--- ===================================================================
--- TABLE 7: results
--- ===================================================================
--- Final assessment results
--- ===================================================================
-CREATE TABLE IF NOT EXISTS results (
+CREATE TABLE IF NOT EXISTS assessment_results (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    attempt_id UUID NOT NULL UNIQUE REFERENCES attempts(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-    assessment_id UUID NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+    attempt_id UUID NOT NULL UNIQUE REFERENCES assessment_attempts(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES assessment_profiles(id) ON DELETE SET NULL, -- optional admin compatibility
+    session_id TEXT,
+    assessment_id UUID NOT NULL REFERENCES assessment_assessments(id) ON DELETE CASCADE,
     total_score NUMERIC(10,2) NOT NULL,
     max_score NUMERIC(10,2) NOT NULL,
     percentage_score NUMERIC(5,2) NOT NULL,
@@ -242,97 +227,154 @@ CREATE TABLE IF NOT EXISTS results (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-COMMENT ON TABLE results IS 'Final assessment results';
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='assessment_results' AND column_name='user_id'
+    ) THEN
+        ALTER TABLE assessment_results ADD COLUMN user_id UUID;
+        BEGIN
+            ALTER TABLE assessment_results
+            ADD CONSTRAINT assessment_results_user_id_fkey
+            FOREIGN KEY (user_id) REFERENCES assessment_profiles(id) ON DELETE SET NULL;
+        EXCEPTION WHEN duplicate_object THEN
+            NULL;
+        END;
+    END IF;
 
-CREATE INDEX IF NOT EXISTS idx_results_attempt_id ON results(attempt_id);
-CREATE INDEX IF NOT EXISTS idx_results_user_id ON results(user_id);
-CREATE INDEX IF NOT EXISTS idx_results_assessment_id ON results(assessment_id);
-CREATE INDEX IF NOT EXISTS idx_results_passed ON results(passed);
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='assessment_results' AND column_name='session_id'
+    ) THEN
+        ALTER TABLE assessment_results ADD COLUMN session_id TEXT;
+    END IF;
+END $$;
 
--- ===================================================================
--- PDF / RAG TABLES (3 Tables)
--- ===================================================================
-
--- ===================================================================
--- TABLE 8: pdf_documents
--- ===================================================================
--- PDF file metadata and tracking
--- ===================================================================
 CREATE TABLE IF NOT EXISTS pdf_documents (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     title TEXT NOT NULL,
-    file_url TEXT NOT NULL, -- Supabase Storage URL
-    file_size BIGINT, -- Size in bytes
+    file_url TEXT NOT NULL,
+    file_size BIGINT,
     upload_date TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     status TEXT DEFAULT 'uploaded' CHECK (status IN ('uploaded', 'processing', 'processed', 'error')),
+    assessment_status TEXT DEFAULT 'pending' CHECK (assessment_status IN ('pending', 'generating', 'generated', 'failed')),
+    assessment_error_message TEXT,
+    assessment_generated_at TIMESTAMP WITH TIME ZONE,
     error_message TEXT,
-    uploaded_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
+    uploaded_by UUID REFERENCES assessment_profiles(id) ON DELETE SET NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-COMMENT ON TABLE pdf_documents IS 'Tracks uploaded PDF files and their processing status';
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pdf_documents' AND column_name = 'assessment_status'
+    ) THEN
+        ALTER TABLE pdf_documents ADD COLUMN assessment_status TEXT DEFAULT 'pending';
+    END IF;
 
-CREATE INDEX IF NOT EXISTS idx_pdf_documents_status ON pdf_documents(status);
-CREATE INDEX IF NOT EXISTS idx_pdf_documents_uploaded_by ON pdf_documents(uploaded_by);
-CREATE INDEX IF NOT EXISTS idx_pdf_documents_upload_date ON pdf_documents(upload_date);
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pdf_documents' AND column_name = 'assessment_error_message'
+    ) THEN
+        ALTER TABLE pdf_documents ADD COLUMN assessment_error_message TEXT;
+    END IF;
 
--- ===================================================================
--- TABLE 9: pdf_embeddings
--- ===================================================================
--- PDF content chunks with vector embeddings
--- ===================================================================
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pdf_documents' AND column_name = 'assessment_generated_at'
+    ) THEN
+        ALTER TABLE pdf_documents ADD COLUMN assessment_generated_at TIMESTAMP WITH TIME ZONE;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.table_constraints
+        WHERE table_schema = 'public'
+          AND table_name = 'pdf_documents'
+          AND constraint_name = 'pdf_documents_assessment_status_check'
+    ) THEN
+        ALTER TABLE pdf_documents
+        ADD CONSTRAINT pdf_documents_assessment_status_check
+        CHECK (assessment_status IN ('pending', 'generating', 'generated', 'failed'));
+    END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS pdf_embeddings (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     pdf_id UUID NOT NULL REFERENCES pdf_documents(id) ON DELETE CASCADE,
     pdf_title TEXT NOT NULL,
     chunk_text TEXT NOT NULL,
-    embedding vector(1536), -- OpenAI text-embedding-3-small dimension
+    embedding vector(1536),
     chunk_index INTEGER NOT NULL,
     page_number INTEGER,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-COMMENT ON TABLE pdf_embeddings IS 'Stores PDF text chunks with vector embeddings for RAG';
+-- ===================================================================
+-- INDEXES
+-- ===================================================================
+CREATE INDEX IF NOT EXISTS idx_assessment_profiles_user_id ON assessment_profiles(user_id);
+CREATE INDEX IF NOT EXISTS idx_assessment_profiles_role ON assessment_profiles(role);
+CREATE INDEX IF NOT EXISTS idx_assessment_profiles_session_id ON assessment_profiles(session_id);
+
+CREATE INDEX IF NOT EXISTS idx_assessment_courses_name ON assessment_courses(name);
+
+CREATE INDEX IF NOT EXISTS idx_assessment_assessments_skill_domain ON assessment_assessments(skill_domain);
+CREATE INDEX IF NOT EXISTS idx_assessment_assessments_course_id ON assessment_assessments(course_id);
+CREATE INDEX IF NOT EXISTS idx_assessment_assessments_status ON assessment_assessments(status);
+CREATE INDEX IF NOT EXISTS idx_assessment_assessments_created_by ON assessment_assessments(created_by);
+
+CREATE INDEX IF NOT EXISTS idx_assessment_questions_assessment_id ON assessment_questions(assessment_id);
+CREATE INDEX IF NOT EXISTS idx_assessment_questions_topic ON assessment_questions(topic);
+CREATE INDEX IF NOT EXISTS idx_assessment_questions_difficulty ON assessment_questions(difficulty);
+CREATE INDEX IF NOT EXISTS idx_assessment_questions_question_type ON assessment_questions(question_type);
+
+CREATE INDEX IF NOT EXISTS idx_assessment_attempts_assessment_id ON assessment_attempts(assessment_id);
+CREATE INDEX IF NOT EXISTS idx_assessment_attempts_user_id ON assessment_attempts(user_id);
+CREATE INDEX IF NOT EXISTS idx_assessment_attempts_session_id ON assessment_attempts(session_id);
+CREATE INDEX IF NOT EXISTS idx_assessment_attempts_status ON assessment_attempts(status);
+CREATE INDEX IF NOT EXISTS idx_assessment_attempts_created_at ON assessment_attempts(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_assessment_responses_attempt_id ON assessment_responses(attempt_id);
+CREATE INDEX IF NOT EXISTS idx_assessment_responses_question_id ON assessment_responses(question_id);
+CREATE INDEX IF NOT EXISTS idx_assessment_responses_status ON assessment_responses(status);
+
+CREATE INDEX IF NOT EXISTS idx_assessment_results_attempt_id ON assessment_results(attempt_id);
+CREATE INDEX IF NOT EXISTS idx_assessment_results_user_id ON assessment_results(user_id);
+CREATE INDEX IF NOT EXISTS idx_assessment_results_session_id ON assessment_results(session_id);
+CREATE INDEX IF NOT EXISTS idx_assessment_results_assessment_id ON assessment_results(assessment_id);
+CREATE INDEX IF NOT EXISTS idx_assessment_results_passed ON assessment_results(passed);
+
+CREATE INDEX IF NOT EXISTS idx_pdf_documents_status ON pdf_documents(status);
+CREATE INDEX IF NOT EXISTS idx_pdf_documents_uploaded_by ON pdf_documents(uploaded_by);
+CREATE INDEX IF NOT EXISTS idx_pdf_documents_upload_date ON pdf_documents(upload_date);
 
 CREATE INDEX IF NOT EXISTS idx_pdf_embeddings_pdf_id ON pdf_embeddings(pdf_id);
 CREATE INDEX IF NOT EXISTS idx_pdf_embeddings_pdf_title ON pdf_embeddings(pdf_title);
 CREATE INDEX IF NOT EXISTS idx_pdf_embeddings_chunk_index ON pdf_embeddings(pdf_id, chunk_index);
-
--- Create vector similarity search index
-CREATE INDEX IF NOT EXISTS idx_pdf_embeddings_embedding ON pdf_embeddings 
+CREATE INDEX IF NOT EXISTS idx_pdf_embeddings_embedding ON pdf_embeddings
 USING ivfflat (embedding vector_cosine_ops)
 WITH (lists = 100);
 
 -- ===================================================================
--- TABLE 10: pdf_processing_log
+-- COMMENTS
 -- ===================================================================
--- Monitor PDF processing pipeline
--- ===================================================================
-CREATE TABLE IF NOT EXISTS pdf_processing_log (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    pdf_id UUID NOT NULL REFERENCES pdf_documents(id) ON DELETE CASCADE,
-    status TEXT NOT NULL CHECK (status IN ('uploaded', 'extracting', 'chunking', 'embedding', 'generating_questions', 'completed', 'error')),
-    error_message TEXT,
-    chunks_created INTEGER DEFAULT 0,
-    questions_generated INTEGER DEFAULT 0,
-    assessments_created INTEGER DEFAULT 0,
-    processing_started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    processing_completed_at TIMESTAMP WITH TIME ZONE,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-COMMENT ON TABLE pdf_processing_log IS 'Tracks PDF processing pipeline status';
-
-CREATE INDEX IF NOT EXISTS idx_pdf_processing_log_pdf_id ON pdf_processing_log(pdf_id);
-CREATE INDEX IF NOT EXISTS idx_pdf_processing_log_status ON pdf_processing_log(status);
+COMMENT ON TABLE assessment_profiles IS 'User profiles for Assessment system';
+COMMENT ON TABLE assessment_courses IS 'Course definitions for grouping assessments';
+COMMENT ON TABLE assessment_assessments IS 'Assessment definitions for Skill Assessment';
+COMMENT ON TABLE assessment_questions IS 'Stores questions generated from PDF embeddings';
+COMMENT ON TABLE assessment_attempts IS 'User attempts for assessments';
+COMMENT ON TABLE assessment_responses IS 'Individual question responses in an attempt';
+COMMENT ON TABLE assessment_results IS 'Final assessment results';
+COMMENT ON TABLE pdf_documents IS 'Tracks uploaded PDF files and their processing status';
+COMMENT ON TABLE pdf_embeddings IS 'Stores PDF text chunks with vector embeddings for RAG';
 
 -- ===================================================================
--- FUNCTIONS AND TRIGGERS
--- ===================================================================
-
--- ===================================================================
--- UPDATE TIMESTAMP FUNCTION
+-- UPDATE TIMESTAMP FUNCTION + TRIGGERS
 -- ===================================================================
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
@@ -342,54 +384,45 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- ===================================================================
--- TRIGGERS FOR AUTO-UPDATE TIMESTAMPS
--- ===================================================================
-DROP TRIGGER IF EXISTS update_profiles_updated_at ON profiles;
-CREATE TRIGGER update_profiles_updated_at
-    BEFORE UPDATE ON profiles
+DROP TRIGGER IF EXISTS update_assessment_profiles_updated_at ON assessment_profiles;
+CREATE TRIGGER update_assessment_profiles_updated_at
+    BEFORE UPDATE ON assessment_profiles
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
-DROP TRIGGER IF EXISTS update_courses_updated_at ON courses;
-CREATE TRIGGER update_courses_updated_at
-    BEFORE UPDATE ON courses
+DROP TRIGGER IF EXISTS update_assessment_courses_updated_at ON assessment_courses;
+CREATE TRIGGER update_assessment_courses_updated_at
+    BEFORE UPDATE ON assessment_courses
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
-DROP TRIGGER IF EXISTS update_assessments_updated_at ON assessments;
-CREATE TRIGGER update_assessments_updated_at
-    BEFORE UPDATE ON assessments
+DROP TRIGGER IF EXISTS update_assessment_assessments_updated_at ON assessment_assessments;
+CREATE TRIGGER update_assessment_assessments_updated_at
+    BEFORE UPDATE ON assessment_assessments
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
-DROP TRIGGER IF EXISTS update_attempts_updated_at ON attempts;
-CREATE TRIGGER update_attempts_updated_at
-    BEFORE UPDATE ON attempts
+DROP TRIGGER IF EXISTS update_assessment_attempts_updated_at ON assessment_attempts;
+CREATE TRIGGER update_assessment_attempts_updated_at
+    BEFORE UPDATE ON assessment_attempts
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
-DROP TRIGGER IF EXISTS update_responses_updated_at ON responses;
-CREATE TRIGGER update_responses_updated_at
-    BEFORE UPDATE ON responses
+DROP TRIGGER IF EXISTS update_assessment_responses_updated_at ON assessment_responses;
+CREATE TRIGGER update_assessment_responses_updated_at
+    BEFORE UPDATE ON assessment_responses
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
-DROP TRIGGER IF EXISTS update_results_updated_at ON results;
-CREATE TRIGGER update_results_updated_at
-    BEFORE UPDATE ON results
+DROP TRIGGER IF EXISTS update_assessment_results_updated_at ON assessment_results;
+CREATE TRIGGER update_assessment_results_updated_at
+    BEFORE UPDATE ON assessment_results
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
 DROP TRIGGER IF EXISTS update_pdf_documents_updated_at ON pdf_documents;
 CREATE TRIGGER update_pdf_documents_updated_at
     BEFORE UPDATE ON pdf_documents
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
-
-DROP TRIGGER IF EXISTS update_pdf_processing_log_updated_at ON pdf_processing_log;
-CREATE TRIGGER update_pdf_processing_log_updated_at
-    BEFORE UPDATE ON pdf_processing_log
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
@@ -424,7 +457,7 @@ BEGIN
         pdf_embeddings.page_number,
         1 - (pdf_embeddings.embedding <=> query_embedding) AS similarity
     FROM pdf_embeddings
-    WHERE 
+    WHERE
         (filter_pdf_id IS NULL OR pdf_embeddings.pdf_id = filter_pdf_id)
         AND 1 - (pdf_embeddings.embedding <=> query_embedding) > match_threshold
     ORDER BY pdf_embeddings.embedding <=> query_embedding
@@ -435,47 +468,10 @@ $$;
 -- ===================================================================
 -- DEFAULT DATA
 -- ===================================================================
-
--- Insert default courses
-INSERT INTO courses (name, description) 
+INSERT INTO assessment_courses (name, description)
 SELECT 'Python', 'Python programming language assessments'
-WHERE NOT EXISTS (SELECT 1 FROM courses WHERE name = 'Python');
+WHERE NOT EXISTS (SELECT 1 FROM assessment_courses WHERE name = 'Python');
 
-INSERT INTO courses (name, description) 
+INSERT INTO assessment_courses (name, description)
 SELECT 'DevOps', 'DevOps tools and practices assessments'
-WHERE NOT EXISTS (SELECT 1 FROM courses WHERE name = 'DevOps');
-
--- ===================================================================
--- VERIFICATION QUERIES
--- ===================================================================
--- Run these after executing the schema to verify everything was created:
-
--- Check all tables exist
--- SELECT table_name 
--- FROM information_schema.tables 
--- WHERE table_schema = 'public' 
---     AND table_name IN (
---         'profiles',
---         'courses',
---         'assessments', 
---         'skill_assessment_questions',
---         'attempts', 
---         'responses', 
---         'results',
---         'pdf_documents',
---         'pdf_embeddings',
---         'pdf_processing_log'
---     )
--- ORDER BY table_name;
-
--- Check courses
--- SELECT * FROM courses;
-
--- Check vector extension
--- SELECT * FROM pg_extension WHERE extname = 'vector';
-
--- Check vector similarity function
--- SELECT routine_name FROM information_schema.routines 
--- WHERE routine_schema = 'public' AND routine_name = 'match_pdf_embeddings';
-
-
+WHERE NOT EXISTS (SELECT 1 FROM assessment_courses WHERE name = 'DevOps');

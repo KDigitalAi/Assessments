@@ -68,7 +68,7 @@ class FolderProcessor:
             
             # Check if course exists (case-insensitive, exact match)
             # Use ilike for case-insensitive search, but also check exact match
-            response = self.client.table("courses")\
+            response = self.client.table("assessment_courses")\
                 .select("id, name")\
                 .ilike("name", course_name)\
                 .limit(10)\
@@ -84,7 +84,7 @@ class FolderProcessor:
             
             # Create new course
             logger.info(f"[INFO] Creating new course: {course_name}")
-            create_response = self.client.table("courses")\
+            create_response = self.client.table("assessment_courses")\
                 .insert({
                     "name": course_name,
                     "description": f"Course: {course_name}"
@@ -145,7 +145,7 @@ class FolderProcessor:
             normalized_title = assessment_title.strip().lower()
             
             # Check if assessment exists for this course
-            response = self.client.table("assessments")\
+            response = self.client.table("assessment_assessments")\
                 .select("id, title")\
                 .eq("course_id", course_id)\
                 .execute()

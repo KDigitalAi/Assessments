@@ -5,8 +5,6 @@ FastAPI main application entry point with improved security and error handling
 from fastapi import FastAPI, Request, status, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-# FRONTEND REMOVED: HTMLResponse, FileResponse, StaticFiles no longer needed
-# Frontend UI is handled by Edify team independently
 from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
 import time
@@ -48,7 +46,7 @@ async def lifespan(app: FastAPI):
     # This is disabled for serverless deployments to prevent cold start failures
     if not os.getenv("VERCEL"):
         try:
-            from app.services.profile_service import get_test_user_id, TEST_USER_EMAIL
+            from app.services.profile_service import get_test_user_id
             
             get_test_user_id()
         except Exception as e:
@@ -227,7 +225,7 @@ async def health_check():
         if client:
             try:
                 # Test connection with a simple query
-                _ = client.table("profiles").select("id").limit(0).execute()
+                _ = client.table("assessment_profiles").select("id").limit(0).execute()
                 supabase_status = "connected"
                 supabase_test = "Connection successful"
             except Exception as test_error:
@@ -293,33 +291,29 @@ async def health_check():
         )
 
 
-# FRONTEND REMOVED: Static file serving disabled (Edify handles UI)
-# Frontend files are no longer served by this backend API service.
-# The Edify frontend team will handle all UI/UX independently.
-
-# Root endpoint - API information (Frontend handled by Edify)
 @app.get("/", tags=["Root"])
 async def root():
-    """Root endpoint - API information"""
-    return JSONResponse({
-        "message": "Skill Assessment Platform API",
-        "version": settings.VERSION,
+    """API status at site root."""
+    return {
+        "message": "Assessment API is running",
         "docs": "/docs",
         "health": "/health",
-        "api_prefix": "/api",
-        "auth_prefix": "/auth",
-        "note": "This is an API-only backend service. Frontend UI is handled by Edify."
-    })
+    }
 
 
-# FRONTEND REMOVED: HTML page endpoints disabled (Edify handles UI)
-# The following endpoints previously served HTML pages but are now removed:
-# - /static/assessment.html
-# - /static/results.html  
-# - /static/assessments.html
-# 
-# Edify frontend will handle all page routing and UI rendering.
-# Backend APIs remain fully functional at /api/* and /auth/* endpoints.
+@app.get("/api-info", tags=["Root"])
+async def api_info():
+    """JSON discovery for tools / integrations."""
+    return JSONResponse(
+        {
+            "message": "Skill Assessment Platform API",
+            "version": settings.VERSION,
+            "docs": "/docs",
+            "health": "/health",
+            "api_prefix": "/api",
+            "auth_prefix": "/auth",
+        }
+    )
 
 
 # Include routers

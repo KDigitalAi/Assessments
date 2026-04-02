@@ -24,8 +24,7 @@ async def upload_pdf(
     Steps:
     1. Upload file to Supabase Storage
     2. Create pdf_documents record
-    3. Create pdf_processing_log record
-    4. Start background processing (extract → chunk → embed)
+    3. Start background processing (extract → chunk → embed)
     
     Returns:
         PDF document metadata
@@ -101,18 +100,6 @@ async def upload_pdf(
                 detail=f"Failed to create document record: {str(e)}"
             )
         
-        # Create processing log
-        log_data = {
-            "pdf_id": pdf_id,
-            "status": "uploaded",
-            "chunks_created": 0
-        }
-        
-        try:
-            client.table("pdf_processing_log").insert(log_data).execute()
-        except Exception as e:
-            logger.warning(f"Error creating processing log: {str(e)}")
-        
         # Start background processing (async)
         # In production, use a task queue (Celery, etc.)
         # For now, we'll process synchronously
@@ -168,7 +155,6 @@ async def process_pdf_background(pdf_id: str, file_content: bytes):
         
         # Update status to processing
         client.table("pdf_documents").update({"status": "processing"}).eq("id", pdf_id).execute()
-        pdf_processor.update_processing_log(pdf_id, "extracting")
         
         # Get PDF title
         pdf_doc = client.table("pdf_documents").select("title").eq("id", pdf_id).execute()
@@ -186,15 +172,11 @@ async def process_pdf_background(pdf_id: str, file_content: bytes):
         if not pages:
             raise Exception("No text extracted from PDF")
         
-        pdf_processor.update_processing_log(pdf_id, "chunking")
-        
         # Process into chunks
         chunks = pdf_processor.process_pdf_pages(pages)
         
         if not chunks:
             raise Exception("No chunks created from PDF")
-        
-        pdf_processor.update_processing_log(pdf_id, "embedding", chunks_created=len(chunks))
         
         # Generate embeddings
         chunks_with_embeddings = pdf_processor.generate_embeddings_for_chunks(chunks)
@@ -210,7 +192,6 @@ async def process_pdf_background(pdf_id: str, file_content: bytes):
         
         # Update status to processed
         client.table("pdf_documents").update({"status": "processed"}).eq("id", pdf_id).execute()
-        pdf_processor.update_processing_log(pdf_id, "completed", chunks_created=len(chunks_with_embeddings))
         
         logger.info(f"Successfully processed PDF {pdf_id}: {len(chunks_with_embeddings)} chunks")
         
@@ -221,7 +202,6 @@ async def process_pdf_background(pdf_id: str, file_content: bytes):
             "status": "error",
             "error_message": str(e)
         }).eq("id", pdf_id).execute()
-        pdf_processor.update_processing_log(pdf_id, "error", error_message=str(e))
         raise
 
 
@@ -265,7 +245,7 @@ async def get_pdf_status(pdf_id: str):
     Get PDF processing status
     
     Returns:
-        PDF document and processing log
+        PDF document
     """
     try:
         client = supabase_service.get_client()
@@ -290,16 +270,9 @@ async def get_pdf_status(pdf_id: str):
         
         logger.debug(f"Retrieved PDF data for pdf_id: {pdf_id}")
         
-        # Get processing log
-        log_response = client.table("pdf_processing_log")\
-            .select("*")\
-            .eq("pdf_id", pdf_id)\
-            .execute()
-        
         return {
             "success": True,
-            "pdf": pdf_response.data[0],
-            "processing_log": log_response.data[0] if log_response.data and len(log_response.data) > 0 else None
+            "pdf": pdf_response.data[0]
         }
         
     except HTTPException:

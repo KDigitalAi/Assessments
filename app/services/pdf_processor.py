@@ -539,62 +539,6 @@ class PDFProcessor:
             logger.error(f"Error storing PDF embeddings: {str(e)}")
             return False
     
-    def update_processing_log(
-        self,
-        pdf_id: str,
-        status: str,
-        chunks_created: int = 0,
-        error_message: Optional[str] = None
-    ) -> bool:
-        """
-        Update PDF processing log
-        
-        Args:
-            pdf_id: PDF document ID
-            status: Processing status
-            chunks_created: Number of chunks created
-            error_message: Error message if any
-        
-        Returns:
-            True if successful
-        """
-        if not self.client:
-            return False
-        
-        try:
-            # Check if log exists
-            existing = self.client.table("pdf_processing_log")\
-                .select("id")\
-                .eq("pdf_id", pdf_id)\
-                .execute()
-            
-            log_data = {
-                "status": status,
-                "chunks_created": chunks_created,
-                "error_message": error_message
-            }
-            
-            if status == "completed":
-                log_data["processing_completed_at"] = "now()"
-            
-            if existing.data:
-                # Update existing log
-                self.client.table("pdf_processing_log")\
-                    .update(log_data)\
-                    .eq("pdf_id", pdf_id)\
-                    .execute()
-            else:
-                # Create new log
-                log_data["pdf_id"] = pdf_id
-                self.client.table("pdf_processing_log").insert(log_data).execute()
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error updating processing log: {str(e)}")
-            return False
-
-
 # Global service instance
 pdf_processor = PDFProcessor()
 

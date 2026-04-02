@@ -1,340 +1,83 @@
 """
-Service for managing user profiles - supports both test user and temporary sessions
+Session-first profile service for assessments.
+Supports no-login student flow and optional admin user mapping.
 """
 
-from typing import Optional
-from uuid import UUID
+from typing import Optional, Dict, Any, Tuple
+from uuid import UUID, uuid4
+
 from app.services.supabase_service import supabase_service
 from app.utils.logger import logger
 
-# Hardcoded test user identifier for Skill Capital
-TEST_USER_EMAIL = "test_user@skillcapital.ai"
-TEST_USER_NAME = "Skill Capital Test User"
-TEST_USER_ROLE = "student"
-
-# Session-based user defaults
-SESSION_USER_ROLE = "student"
-SESSION_USER_ORG = "Guest Session"
+DEFAULT_STUDENT_ROLE = "student"
 
 
-def ensure_default_test_user(session_id: Optional[str] = None) -> Optional[UUID]:
+def resolve_session_id(session_id: Optional[str]) -> str:
+    """Return provided session id or generate a new UUID string."""
+    sid = (session_id or "").strip()
+    return sid if sid else str(uuid4())
+
+
+def get_or_create_session_profile(session_id: Optional[str]) -> Tuple[Optional[Dict[str, Any]], str]:
     """
-    Ensure a user profile exists.
-    
-    If session_id is provided:
-    1. Check for existing profile with this session_id
-    2. If not found, create a new profile linked to this session_id
-    
-    If no session_id (Legacy Mode):
-    1. Check for test user (test_user@skillcapital.ai) by email
-    2. If found, return its UUID
-    3. If not found, try to create it using an existing auth.user ID
-    4. If creation fails, try to use any existing profile as fallback
-    
-    Args:
-        session_id: Optional temporary session ID for isolation
-    
+    Ensure a session-backed profile exists in assessment_profiles.
+
     Returns:
-        UUID of the user profile, or None if creation failed
+        (profile_row_or_none, effective_session_id)
     """
-    try:
-        client = supabase_service.get_client()
-        if not client:
-            logger.error("Supabase client not available. Cannot access user profile.")
-            return None
-            
-        # =========================================================
-        # PATH A: SESSION-BASED ISOLATION (New Behavior)
-        # =========================================================
-        if session_id:
-            logger.info(f"Using Session ID: {session_id}")
-            
-            # 1. Try to find existing profile for this session
-            try:
-                # Optimized query for session lookup
-                session_response = client.table("profiles")\
-                    .select("id")\
-                    .eq("session_id", session_id)\
-                    .limit(1)\
-                    .execute()
-                
-                if session_response.data and len(session_response.data) > 0:
-                    profile_id = session_response.data[0].get("id")
-                    logger.debug(f"Found existing profile {profile_id} for session {session_id}")
-                    return UUID(profile_id) if profile_id else None
-            except Exception as e:
-                logger.warning(f"Error checking for session user: {str(e)}")
-                # If error is about missing column, fall through to legacy path
-                if "column" in str(e).lower() and "session_id" in str(e).lower():
-                    logger.error("Create session_id column in database to use session isolation.")
-                    # Continue to legacy path
-                else:
-                    # Generic error - try creation
-                    pass
-            
-            # 2. Create new profile for this session
-            try:
-                # Need to create a new Auth User to satisfy FK constraint
-                service_client = supabase_service.get_client(use_service_key=True)
-                if service_client:
-                    # Create a dummy email for the session
-                    session_email = f"session_{session_id}@temp.skillcapital.ai"
-                    try:
-                         # Try to create auth user
-                        auth_response = service_client.auth.admin.create_user({
-                            "email": session_email,
-                            "email_confirm": True,
-                            "user_metadata": {"full_name": "Guest Session"}
-                        })
-                        if auth_response and auth_response.user:
-                             auth_user_id = auth_response.user.id
-                             
-                             # Now create the profile
-                             profile_data = {
-                                 "id": str(auth_user_id),
-                                 "email": session_email,
-                                 "full_name": f"Guest {session_id[:6]}",
-                                 "role": SESSION_USER_ROLE,
-                                 "organization": SESSION_USER_ORG,
-                                 "session_id": session_id
-                             }
-                             
-                             client.table("profiles").insert(profile_data).execute()
-                             logger.info(f"Created new session profile for {session_id}")
-                             return UUID(auth_user_id)
-                    except Exception as auth_error:
-                         logger.warning(f"Failed to create auth user for session: {auth_error}")
-                         # Fallback will occur below
-            except Exception as e:
-                logger.error(f"Error creating session user: {str(e)}")
+    sid = resolve_session_id(session_id)
+    client = supabase_service.get_client(use_service_key=True) or supabase_service.get_client()
+    if not client:
+        logger.error("Supabase client not available in get_or_create_session_profile")
+        return None, sid
 
-        # =========================================================
-        # PATH B: LEGACY TEST USER (Original Behavior)
-        # =========================================================
-        
-        # Step 1: Check if test user already exists by email
-        try:
-            test_user_response = client.table("profiles")\
-                .select("id, email, full_name")\
-                .eq("email", TEST_USER_EMAIL)\
-                .limit(1)\
-                .execute()
-            
-            if test_user_response.data and len(test_user_response.data) > 0:
-                profile_id = test_user_response.data[0].get("id")
-                return UUID(profile_id) if profile_id else None
-        except Exception as e:
-            logger.warning(f"Error checking for test user: {str(e)}")
-        
-        # Step 2: Test user doesn't exist - try to create it
-        
-        # Strategy: Use SQL to create the profile using any existing auth.user ID
-        # This bypasses the need to know the auth.user ID upfront
-        try:
-            # Strategy 1: Try to create via SQL using any existing auth.user ID
-            # This SQL will use any existing auth.user ID from auth.users table
-            sql_insert = f"""
-                INSERT INTO profiles (id, email, full_name, role, organization)
-                SELECT 
-                    id,
-                    '{TEST_USER_EMAIL}',
-                    '{TEST_USER_NAME}',
-                    '{TEST_USER_ROLE}',
-                    'Skill Capital'
-                FROM auth.users
-                WHERE id NOT IN (SELECT id FROM profiles WHERE id IS NOT NULL)
-                LIMIT 1
-                ON CONFLICT (id) DO UPDATE
-                SET email = EXCLUDED.email,
-                    full_name = EXCLUDED.full_name,
-                    role = EXCLUDED.role,
-                    organization = EXCLUDED.organization
-                RETURNING id;
-            """
-            
-            # Try to execute SQL via RPC (requires a custom function in Supabase)
-            # If that doesn't work, we'll try the direct insert method below
-            try:
-                # Note: This requires a custom RPC function in Supabase
-                # For now, we'll skip this and use direct insert
-                pass
-            except Exception:
-                pass
-            
-            # Strategy 2: Try to get any existing auth.user ID from existing profiles
-            # Since profiles.id references auth.users.id, existing profile IDs are valid auth.user IDs
-            existing_profiles = client.table("profiles").select("id").limit(1).execute()
-            auth_user_id = None
-            
-            if existing_profiles.data and len(existing_profiles.data) > 0:
-                # Use existing profile's ID (which is already a valid auth.user ID)
-                auth_user_id = existing_profiles.data[0].get("id")
-            else:
-                # Profiles table is empty - try to get auth.user ID via RPC or SQL
-                
-                # Try to use RPC to create test user profile automatically
-                # Strategy: Try to call a Supabase RPC function that can access auth.users
-                try:
-                    # Try RPC function that creates test user profile
-                    # This requires create_test_user_rpc.sql to be run in Supabase first
-                    rpc_result = client.rpc(
-                        "create_test_user_profile",
-                        {
-                            "p_email": TEST_USER_EMAIL,
-                            "p_full_name": TEST_USER_NAME,
-                            "p_role": TEST_USER_ROLE,
-                            "p_organization": "Skill Capital"
-                        }
-                    ).execute()
-                    
-                    if rpc_result.data:
-                        # Function returns profile data
-                        profile_data = rpc_result.data[0] if isinstance(rpc_result.data, list) else rpc_result.data
-                        if profile_data:
-                            auth_user_id = profile_data.get("id")
-                            if auth_user_id:
-                                # Verify and return
-                                verify_response = client.table("profiles")\
-                                    .select("*")\
-                                    .eq("email", TEST_USER_EMAIL)\
-                                    .limit(1)\
-                                    .execute()
-                                if verify_response.data:
-                                    profile_id = verify_response.data[0].get("id")
-                                    return UUID(profile_id) if profile_id else None
-                except Exception as rpc_error:
-                    # RPC function doesn't exist - that's okay, continue with SQL approach
-                    auth_user_id = None
-                
-                # If we still don't have auth_user_id, provide clear instructions
-                if not auth_user_id:
-                    logger.warning("Profiles table is empty. Cannot auto-create profile without auth.user ID.")
-                    logger.warning("   SOLUTION: Run this SQL in Supabase SQL Editor (SQL Editor > New Query):")
-                    logger.warning("")
-                    logger.warning("   INSERT INTO profiles (id, email, full_name, role, organization)")
-                    logger.warning(f"   SELECT id, '{TEST_USER_EMAIL}', '{TEST_USER_NAME}', '{TEST_USER_ROLE}', 'Skill Capital'")
-                    logger.warning("   FROM auth.users")
-                    logger.warning("   WHERE id NOT IN (SELECT id FROM profiles WHERE id IS NOT NULL)")
-                    logger.warning("   LIMIT 1")
-                    logger.warning("   ON CONFLICT (id) DO UPDATE")
-                    logger.warning("   SET email = EXCLUDED.email,")
-                    logger.warning("       full_name = EXCLUDED.full_name,")
-                    logger.warning("       role = EXCLUDED.role,")
-                    logger.warning("       organization = EXCLUDED.organization;")
-                    logger.warning("")
-                    logger.warning("   Or use the provided SQL file: create_test_user.sql")
-                    logger.warning("")
-                    
-                    # If auth.users might be empty, provide instructions to create auth.user first
-                    logger.warning("   NOTE: If auth.users is also empty, create an auth user first:")
-                    logger.warning("   1. Go to Supabase Dashboard > Authentication > Users")
-                    logger.warning("   2. Click 'Add user' or 'Invite user'")
-                    logger.warning("   3. Create a user (email doesn't matter for test user)")
-                    logger.warning("   4. Then run the SQL above")
-                    
-                    return None
-            
-            # Only proceed if we have auth_user_id
-            if not auth_user_id:
-                return None
-            
-            # Try to insert the test user profile with the auth_user_id
-            test_profile_data = {
-                "id": str(auth_user_id),
-                "email": TEST_USER_EMAIL,
-                "full_name": TEST_USER_NAME,
-                "role": TEST_USER_ROLE,
-                "organization": "Skill Capital"
-            }
-            
-            try:
-                profile_response = client.table("profiles").insert(test_profile_data).execute()
-                if profile_response.data and len(profile_response.data) > 0:
-                    profile_id = UUID(profile_response.data[0].get("id"))
-                    
-                    # Verify the creation by fetching again
-                    verify_response = client.table("profiles")\
-                        .select("*")\
-                        .eq("email", TEST_USER_EMAIL)\
-                        .limit(1)\
-                        .execute()
-                    
-                    if verify_response.data and len(verify_response.data) > 0:
-                        profile_data = verify_response.data[0]
-                        success_msg = f"Default test user created successfully in Supabase"
-                        return profile_id
-                    else:
-                        logger.error("Profile created but verification failed - profile not found in database")
-                        return None
-                        
-            except Exception as insert_error:
-                error_msg = str(insert_error).lower()
-                if "unique" in error_msg or "duplicate" in error_msg or "conflict" in error_msg or "violates unique constraint" in error_msg:
-                    # Profile might have been created by another request - try to fetch it again
-                    try:
-                        test_user_response = client.table("profiles")\
-                            .select("*")\
-                            .eq("email", TEST_USER_EMAIL)\
-                            .limit(1)\
-                            .execute()
-                        if test_user_response.data and len(test_user_response.data) > 0:
-                            profile_id = test_user_response.data[0].get("id")
-                            success_msg = f"Test user already exists in Supabase: {TEST_USER_EMAIL}"
-                            return UUID(profile_id) if profile_id else None
-                    except Exception:
-                        pass
-                
-                logger.error(f"Could not create test user: {str(insert_error)}")
-                logger.error(f"   Error details: {type(insert_error).__name__}: {insert_error}")
-                # Fall through to use existing profile as fallback
-        except Exception as create_error:
-            logger.warning(f"Could not create test user: {str(create_error)}")
-            # Fall through to use existing profile
-        
-        # Fallback: Use any existing profile (if test user creation failed)
-        try:
-            existing_profiles = client.table("profiles").select("id").limit(1).execute()
-            if existing_profiles.data and len(existing_profiles.data) > 0:
-                profile_id = existing_profiles.data[0].get("id")
-                logger.warning(f"Using existing profile as fallback: {profile_id}")
-                logger.warning(f"   Could not create test user. Please ensure auth.users has at least one user.")
-                return UUID(profile_id) if profile_id else None
-        except Exception as e:
-            logger.error(f"Could not get any existing profile: {str(e)}")
-        
-        # All strategies failed
-        logger.error("Failed to create or find test user profile")
-        logger.error("   SOLUTION: Run this SQL in Supabase SQL Editor:")
-        logger.error("   INSERT INTO profiles (id, email, full_name, role, organization)")
-        logger.error("   SELECT id, 'test_user@skillcapital.ai', 'Skill Capital Test User', 'student', 'Skill Capital'")
-        logger.error("   FROM auth.users WHERE id NOT IN (SELECT id FROM profiles) LIMIT 1")
-        logger.error("   ON CONFLICT (id) DO NOTHING;")
-        return None
-        
+    try:
+        existing = client.table("assessment_profiles")\
+            .select("id, user_id, session_id, role, created_at")\
+            .eq("session_id", sid)\
+            .limit(1)\
+            .execute()
+        if existing.data:
+            return existing.data[0], sid
+
+        payload = {
+            "session_id": sid,
+            "role": DEFAULT_STUDENT_ROLE,
+        }
+        created = client.table("assessment_profiles").insert(payload).execute()
+        if created.data:
+            return created.data[0], sid
+
+        # Defensive fallback read-after-write
+        verify = client.table("assessment_profiles")\
+            .select("id, user_id, session_id, role, created_at")\
+            .eq("session_id", sid)\
+            .limit(1)\
+            .execute()
+        if verify.data:
+            return verify.data[0], sid
+
+        logger.error("Failed to create session profile")
+        return None, sid
     except Exception as e:
-        logger.error(f"Error in ensure_default_test_user: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return None
+        logger.error(f"Error in get_or_create_session_profile: {str(e)}")
+        return None, sid
 
 
 def get_test_user_id(session_id: Optional[str] = None) -> Optional[UUID]:
     """
-    Get the user user ID - either the session-specific user or the default test user.
-    This is the main function used throughout the application.
-    
-    Args:
-        session_id: Optional session ID from request header
-        
-    Returns:
-        UUID of the user profile
+    Backward-compatible alias used by existing routes.
+    Returns session profile primary key UUID.
     """
-    return ensure_default_test_user(session_id)
+    profile, _ = get_or_create_session_profile(session_id)
+    if not profile:
+        return None
+    try:
+        return UUID(str(profile.get("id")))
+    except Exception:
+        return None
 
 
 def get_or_create_default_user() -> Optional[UUID]:
-    """
-    Alias for get_test_user_id() for backward compatibility.
-    """
+    """Backward-compatible helper."""
     return get_test_user_id()
-

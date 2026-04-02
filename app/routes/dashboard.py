@@ -13,6 +13,7 @@ import json
 from app.services.supabase_service import supabase_service
 from app.services.topic_question_service import topic_question_service
 from app.services.feedback_service import FeedbackService
+from app.services.profile_service import get_or_create_session_profile, resolve_session_id
 from app.utils.logger import logger
 
 # Initialize feedback service
@@ -56,7 +57,7 @@ async def get_assessments():
         
         # Get all courses
         try:
-            courses_response = client.table("courses")\
+            courses_response = client.table("assessment_courses")\
                 .select("*")\
                 .execute()
             
@@ -73,7 +74,7 @@ async def get_assessments():
         
         # Get all published assessments with course_id
         try:
-            assessments_response = client.table("assessments")\
+            assessments_response = client.table("assessment_assessments")\
                 .select("*")\
                 .eq("status", "published")\
                 .execute()
@@ -114,7 +115,7 @@ async def get_assessments():
             # Count assessments directly from database for accuracy
             # Query: COUNT(*) FROM assessments WHERE course_id = <course_id> AND status = 'published'
             try:
-                count_response = client.table("assessments")\
+                count_response = client.table("assessment_assessments")\
                     .select("id", count="exact")\
                     .eq("course_id", course_id)\
                     .eq("status", "published")\
@@ -127,7 +128,7 @@ async def get_assessments():
                     test_count = count_response.__dict__['count']
                 else:
                     # Fallback: query all and count (less efficient but reliable)
-                    count_data = client.table("assessments")\
+                    count_data = client.table("assessment_assessments")\
                         .select("id")\
                         .eq("course_id", course_id)\
                         .eq("status", "published")\
@@ -260,7 +261,7 @@ async def get_assessments_with_course_filter(
             )
         
         # Start building query
-        query = client.table("assessments")\
+        query = client.table("assessment_assessments")\
             .select("*")\
             .eq("status", "published")
         
@@ -278,7 +279,7 @@ async def get_assessments_with_course_filter(
                 logger.info(f"Filtering assessments by course_id: {course_id}")
                 
                 # Verify course exists
-                course_response = client.table("courses")\
+                course_response = client.table("assessment_courses")\
                     .select("id, name")\
                     .eq("id", course_id)\
                     .limit(1)\
@@ -439,7 +440,7 @@ async def get_assessments_by_course(course_id: str):
             )
         
         # Get course name first (verify course exists)
-        course_response = client.table("courses")\
+        course_response = client.table("assessment_courses")\
             .select("id, name")\
             .eq("id", course_id)\
             .limit(1)\
@@ -457,7 +458,7 @@ async def get_assessments_by_course(course_id: str):
         logger.debug(f"Retrieved course: {course_name} (ID: {course_id})")
         
         # Get assessments by course_id ONLY (strict filtering)
-        assessments_response = client.table("assessments")\
+        assessments_response = client.table("assessment_assessments")\
             .select("*")\
             .eq("status", "published")\
             .eq("course_id", course_id)\
@@ -598,7 +599,7 @@ async def get_assessment_questions(
             )
         
         # Get assessment
-        assessment_response = client.table("assessments")\
+        assessment_response = client.table("assessment_assessments")\
             .select("*")\
             .eq("id", assessment_id)\
             .eq("status", "published")\
@@ -632,7 +633,7 @@ async def get_assessment_questions(
         questions = []
         
         # Method 1: Get questions by assessment_id (primary method for generated assessments)
-        questions_response = client.table("skill_assessment_questions")\
+        questions_response = client.table("assessment_questions")\
             .select("*")\
             .eq("assessment_id", assessment_id)\
             .order("created_at", desc=False)\
@@ -642,7 +643,7 @@ async def get_assessment_questions(
         
         # Method 2: If no questions found by assessment_id, try blueprint question_ids
         if not questions and question_ids:
-            questions_response = client.table("skill_assessment_questions")\
+            questions_response = client.table("assessment_questions")\
                 .select("*")\
                 .in_("id", question_ids)\
                 .execute()
@@ -654,7 +655,7 @@ async def get_assessment_questions(
             skill_domain = assessment.get("skill_domain", "")
             question_count = assessment.get("question_count", 10)
             
-            questions_response = client.table("skill_assessment_questions")\
+            questions_response = client.table("assessment_questions")\
                 .select("*")\
                 .eq("topic", skill_domain)\
                 .limit(question_count)\
@@ -672,82 +673,29 @@ async def get_assessment_questions(
                 "difficulty": q.get("difficulty", "medium")
             })
         
-        # Create attempt for this assessment
-        # Always create an attempt - ensure we have a user_id (required by schema)
+        # Create attempt for this assessment using session identity
         attempt = None
         attempt_id = None
-        
+        effective_session_id = resolve_session_id(x_session_id)
         try:
-            # Always use the single test user for Skill Capital
-            from app.services.profile_service import get_test_user_id
-            
-            system_user_id = None
-            try:
-                # Get the test user - this will create it if it doesn't exist
-                # Pass session_id to isolate this user if provided
-                test_user_id = get_test_user_id(session_id=x_session_id)
-                if test_user_id:
-                    system_user_id = str(test_user_id)
-                else:
-                    logger.error("Could not get test user. Attempt creation will fail.")
-                    logger.error("   Please ensure auth.users has at least one user, then run the SQL in profile_service.py")
-            except Exception as e:
-                logger.error(f"Error getting test user: {str(e)}")
-                import traceback
-                logger.error(traceback.format_exc())
-            
-            # Only create attempt if we have a user_id (required by schema)
-            if system_user_id:
-                attempt_data = {
-                    "assessment_id": str(assessment_id),
-                    "user_id": system_user_id,
-                    "status": "in_progress",
-                    "started_at": datetime.now(timezone.utc).isoformat(),
-                    "duration_minutes": assessment.get("duration_minutes", 30),
-                    "total_score": 0,
-                    "max_score": len(formatted_questions),
-                    "percentage_score": 0
-                }
-                
-                
-                try:
-                    attempt_response = client.table("attempts").insert(attempt_data).execute()
-                    attempt = attempt_response.data[0] if attempt_response.data else None
-                    attempt_id = attempt.get("id") if attempt else None
-                    
-                    if not attempt_id:
-                        logger.error("Failed to create attempt - no ID returned")
-                        logger.error(f"Insert response: {attempt_response.data if attempt_response else 'No response'}")
-                        logger.error(f"Attempt data sent: {attempt_data}")
-                    else:
-                        
-                        # Verify attempt was actually inserted
-                        try:
-                            verify_response = client.table("attempts")\
-                                .select("id, status, assessment_id, user_id")\
-                                .eq("id", attempt_id)\
-                                .limit(1)\
-                                .execute()
-                            if not verify_response.data:
-                                logger.error(f"Attempt creation verification failed - attempt not found in database")
-                        except Exception as verify_error:
-                            logger.error(f"Error verifying attempt: {str(verify_error)}")
-                except Exception as insert_error:
-                    logger.error(f"Error inserting attempt: {str(insert_error)}")
-                    import traceback
-                    logger.error(traceback.format_exc())
-                    attempt_id = None
-            else:
-                logger.error("No user_id available - cannot create attempt. Submission will fail.")
-                logger.error("SOLUTION: Ensure at least one profile exists in the 'profiles' table.")
-                logger.error("   Run create_test_user.sql in Supabase SQL Editor to create the test user.")
-                # Still return questions, but attempt_id will be None
-                attempt_id = None
+            profile, effective_session_id = get_or_create_session_profile(effective_session_id)
+            profile_id = str(profile.get("id")) if profile else None
+            attempt_data = {
+                "assessment_id": str(assessment_id),
+                "session_id": effective_session_id,
+                "user_id": profile_id,  # optional for admin compatibility
+                "status": "in_progress",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "duration_minutes": assessment.get("duration_minutes", 30),
+                "total_score": 0,
+                "max_score": len(formatted_questions),
+                "percentage_score": 0
+            }
+            attempt_response = client.table("assessment_attempts").insert(attempt_data).execute()
+            attempt = attempt_response.data[0] if attempt_response.data else None
+            attempt_id = attempt.get("id") if attempt else None
         except Exception as e:
-            logger.error(f"Could not create attempt: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            # Continue without attempt - frontend will handle this
+            logger.error(f"Could not create attempt for session {effective_session_id}: {str(e)}")
             attempt = None
             attempt_id = None
         
@@ -759,17 +707,15 @@ async def get_assessment_questions(
             "title": assessment.get("title") or assessment.get("skill_domain", "Assessment"),
             "questions": formatted_questions,
             "duration_minutes": assessment.get("duration_minutes", 30),
-            "started_at": attempt.get("started_at") if attempt else datetime.now(timezone.utc).isoformat()
+            "started_at": attempt.get("started_at") if attempt else datetime.now(timezone.utc).isoformat(),
+            "session_id": effective_session_id
         }
         
         # Log warning if attempt_id is missing
         if not attempt_id:
-            logger.error(f"No attempt_id created for assessment {assessment_id}. Submission will fail.")
-            logger.error("   This usually means no user profile exists in the database.")
-            logger.error("   Please ensure at least one profile exists in the 'profiles' table.")
-            # Still return questions so user can see them, but they can't submit
-            response_data["error"] = "No attempt created. Please ensure at least one user profile exists in the database."
-            response_data["warning"] = "Assessment loaded but submission may fail. Please create a user profile in Supabase."
+            logger.error(f"No attempt_id created for assessment {assessment_id}. Submission may fail.")
+            response_data["error"] = "No attempt created. Please retry."
+            response_data["warning"] = "Attempt creation failed for this session."
         
         return response_data
         
@@ -808,7 +754,7 @@ async def start_assessment(
             )
         
         # Find or create assessment
-        assessment_response = client.table("assessments")\
+        assessment_response = client.table("assessment_assessments")\
             .select("*")\
             .eq("skill_domain", request.skill_name)\
             .eq("status", "published")\
@@ -838,7 +784,7 @@ async def start_assessment(
                 "created_by": None  # System-generated assessment
             }
             
-            assessment_response = admin_client.table("assessments").insert(assessment_data).execute()
+            assessment_response = admin_client.table("assessment_assessments").insert(assessment_data).execute()
             assessment = assessment_response.data[0] if assessment_response.data else None
         
         assessment_id = UUID(assessment["id"])
@@ -860,7 +806,7 @@ async def start_assessment(
         
         # If no question_ids from blueprint, get questions by topic
         if not question_ids:
-            questions_response = client.table("skill_assessment_questions")\
+            questions_response = client.table("assessment_questions")\
                 .select("*")\
                 .eq("topic", request.skill_name)\
                 .limit(request.num_questions)\
@@ -869,7 +815,7 @@ async def start_assessment(
             questions = questions_response.data if questions_response.data else []
         else:
             # Get questions by IDs from blueprint
-            questions_response = client.table("skill_assessment_questions")\
+            questions_response = client.table("assessment_questions")\
                 .select("*")\
                 .in_("id", question_ids[:request.num_questions])\
                 .execute()
@@ -890,46 +836,27 @@ async def start_assessment(
             )
             
             if result.get("success") and result.get("question_ids"):
-                questions_response = client.table("skill_assessment_questions")\
+                questions_response = client.table("assessment_questions")\
                     .select("*")\
                     .in_("id", result.get("question_ids", [])[:request.num_questions])\
                     .execute()
                 
                 questions = questions_response.data if questions_response.data else []
         
-        # Create attempt - always use the test user
-        from app.services.profile_service import get_test_user_id
-        
-        system_user_id = None
-        try:
-            # Get the test user - this will create it if it doesn't exist
-            # Pass session_id to isolate this user if provided
-            test_user_id = get_test_user_id(session_id=x_session_id)
-            if test_user_id:
-                system_user_id = str(test_user_id)
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="No test user available. Cannot create assessment attempt. Please ensure auth.users has at least one user."
-                )
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Error getting test user: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Error getting test user: {str(e)}"
-            )
-        
+        # Create attempt using session identity (no-login student flow)
+        effective_session_id = resolve_session_id(x_session_id)
+        profile, effective_session_id = get_or_create_session_profile(effective_session_id)
+        profile_id = str(profile.get("id")) if profile else None
         attempt_data = {
             "assessment_id": str(assessment_id),
-            "user_id": system_user_id,
+            "session_id": effective_session_id,
+            "user_id": profile_id,  # optional admin compatibility
             "status": "in_progress",
             "started_at": datetime.now(timezone.utc).isoformat(),
             "duration_minutes": assessment.get("duration_minutes", 30)
         }
         
-        attempt_response = client.table("attempts").insert(attempt_data).execute()
+        attempt_response = client.table("assessment_attempts").insert(attempt_data).execute()
         attempt = attempt_response.data[0] if attempt_response.data else None
         
         if not attempt:
@@ -955,7 +882,8 @@ async def start_assessment(
             "assessment_id": str(assessment_id),
             "questions": formatted_questions,
             "duration_minutes": assessment.get("duration_minutes", 30),
-            "started_at": attempt["started_at"]
+            "started_at": attempt["started_at"],
+            "session_id": effective_session_id
         }
         
     except HTTPException:
@@ -970,7 +898,8 @@ async def start_assessment(
 
 @router.post("/submitAssessment")
 async def submit_assessment(
-    request: SubmitAssessmentRequest
+    request: SubmitAssessmentRequest,
+    x_session_id: Optional[str] = Header(None, alias="X-Session-Id")
 ):
     """
     Submit assessment answers and calculate score
@@ -994,7 +923,7 @@ async def submit_assessment(
         attempt_id_str = str(request.attempt_id)
         
         # Try to find the attempt - check both UUID and string format
-        attempt_response = client.table("attempts")\
+        attempt_response = client.table("assessment_attempts")\
             .select("*")\
             .eq("id", attempt_id_str)\
             .limit(1)\
@@ -1007,7 +936,7 @@ async def submit_assessment(
             logger.error(f"Attempt not found: {attempt_id_str}")
             try:
                 # Get a sample of recent attempts for debugging
-                recent_attempts = client.table("attempts")\
+                recent_attempts = client.table("assessment_attempts")\
                     .select("id, assessment_id, status, started_at")\
                     .order("started_at", desc=True)\
                     .limit(5)\
@@ -1019,6 +948,13 @@ async def submit_assessment(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"No active assessment attempt found for ID: {attempt_id_str}. Please start a new assessment."
+            )
+        effective_session_id = resolve_session_id(x_session_id)
+        attempt_session_id = str(attempt.get("session_id") or "")
+        if not attempt_session_id or attempt_session_id != effective_session_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This attempt does not belong to the current session."
             )
         
         
@@ -1038,7 +974,7 @@ async def submit_assessment(
                 detail="No answers provided."
             )
         
-        questions_response = client.table("skill_assessment_questions")\
+        questions_response = client.table("assessment_questions")\
             .select("id, question, correct_answer, explanation, options")\
             .in_("id", question_ids)\
             .execute()
@@ -1091,7 +1027,7 @@ async def submit_assessment(
                 "status": "scored"
             }
             
-            client.table("responses").insert(response_data).execute()
+            client.table("assessment_responses").insert(response_data).execute()
         
         # Update attempt
         update_data = {
@@ -1102,7 +1038,7 @@ async def submit_assessment(
             "percentage_score": percentage_score
         }
         
-        client.table("attempts")\
+        client.table("assessment_attempts")\
             .update(update_data)\
             .eq("id", str(request.attempt_id))\
             .execute()
@@ -1112,7 +1048,7 @@ async def submit_assessment(
         skill_domain = None
         if assessment_id:
             try:
-                assessment_response = client.table("assessments")\
+                assessment_response = client.table("assessment_assessments")\
                     .select("skill_domain, title")\
                     .eq("id", str(assessment_id))\
                     .limit(1)\
@@ -1139,32 +1075,28 @@ async def submit_assessment(
             logger.warning(f"Feedback generation failed: {str(e)}. Using fallback.")
             # Fallback will be handled by the service
         
-        # Create result - use user_id from attempt (required by schema)
-        user_id = attempt.get("user_id")
-        if not user_id:
-            logger.warning("Attempt has no user_id - cannot create result record")
-            # Still return success, but log warning
-        else:
-            result_data_db = {
-                "attempt_id": str(request.attempt_id),
-                "user_id": user_id,  # Use user_id from attempt
-                "assessment_id": attempt.get("assessment_id"),
-                "total_score": total_score,
-                "max_score": max_score,
-                "percentage_score": percentage_score,
-                "passing_score": 60,
-                "passed": percentage_score >= 60
-            }
-            
-            # Add feedback if generated
-            if feedback_message:
-                result_data_db["overall_feedback"] = feedback_message
-            
-            try:
-                client.table("results").insert(result_data_db).execute()
-            except Exception as e:
-                logger.error(f"Could not create result: {str(e)}")
-                # Continue anyway - result is still returned to frontend
+        # Create result with session identity
+        result_data_db = {
+            "attempt_id": str(request.attempt_id),
+            "session_id": effective_session_id,
+            "user_id": attempt.get("user_id"),  # optional admin compatibility
+            "assessment_id": attempt.get("assessment_id"),
+            "total_score": total_score,
+            "max_score": max_score,
+            "percentage_score": percentage_score,
+            "passing_score": 60,
+            "passed": percentage_score >= 60
+        }
+        
+        # Add feedback if generated
+        if feedback_message:
+            result_data_db["overall_feedback"] = feedback_message
+        
+        try:
+            client.table("assessment_results").insert(result_data_db).execute()
+        except Exception as e:
+            logger.error(f"Could not create result: {str(e)}")
+            # Continue anyway - result is still returned to frontend
         
         return {
             "success": True,
@@ -1189,7 +1121,10 @@ async def submit_assessment(
 
 
 @router.get("/attempts/{attempt_id}/result")
-async def get_attempt_result(attempt_id: str):
+async def get_attempt_result(
+    attempt_id: str,
+    x_session_id: Optional[str] = Header(None, alias="X-Session-Id")
+):
     """
     Get complete result data for a specific assessment attempt
     
@@ -1208,9 +1143,11 @@ async def get_attempt_result(attempt_id: str):
             )
         
         # Get attempt with result and assessment info
-        attempt_response = client.table("attempts")\
-            .select("*, results(*), assessments(*)")\
+        effective_session_id = resolve_session_id(x_session_id)
+        attempt_response = client.table("assessment_attempts")\
+            .select("*, assessment_results(*), assessment_assessments(*)")\
             .eq("id", attempt_id)\
+            .eq("session_id", effective_session_id)\
             .limit(1)\
             .execute()
         
@@ -1219,7 +1156,7 @@ async def get_attempt_result(attempt_id: str):
             return {
                 "success": False,
                 "error": "NO_RESULT_FOUND",
-                "detail": f"Attempt not found: {attempt_id}"
+                "detail": f"Attempt not found for this session: {attempt_id}"
             }
         
         logger.debug(f"Retrieved attempt data for attempt_id: {attempt_id}")
@@ -1242,7 +1179,7 @@ async def get_attempt_result(attempt_id: str):
             }
         
         # Get all responses for this attempt
-        responses_response = client.table("responses")\
+        responses_response = client.table("assessment_responses")\
             .select("*")\
             .eq("attempt_id", attempt_id)\
             .execute()
@@ -1255,7 +1192,7 @@ async def get_attempt_result(attempt_id: str):
         # Fetch questions separately if we have question IDs
         questions_dict = {}
         if question_ids:
-            questions_response = client.table("skill_assessment_questions")\
+            questions_response = client.table("assessment_questions")\
                 .select("*")\
                 .in_("id", question_ids)\
                 .execute()
@@ -1316,7 +1253,7 @@ async def get_attempt_result(attempt_id: str):
                 # Optionally update the result with generated feedback
                 if feedback:
                     try:
-                        client.table("results")\
+                        client.table("assessment_results")\
                             .update({"overall_feedback": feedback})\
                             .eq("id", result.get("id"))\
                             .execute()
@@ -1393,19 +1330,14 @@ async def get_progress(
                 detail="Database service unavailable"
             )
         
-        # Get test user ID for filtering (if available)
-        from app.services.profile_service import get_test_user_id
-        test_user_id = get_test_user_id(session_id=x_session_id)
+        effective_session_id = resolve_session_id(x_session_id)
         
-        # Build query - filter by test user if available, otherwise get all completed attempts
-        query = client.table("attempts")\
-            .select("*, results(*), assessments(skill_domain, title)")\
+        # Build query - session scoped for no-login student flow
+        query = client.table("assessment_attempts")\
+            .select("*, assessment_results(*), assessment_assessments(skill_domain, title)")\
             .eq("status", "completed")\
+            .eq("session_id", effective_session_id)\
             .order("completed_at", desc=True)
-        
-        # Filter by test user if available (for single-user mode)
-        if test_user_id:
-            query = query.eq("user_id", str(test_user_id))
         
         attempts_response = query.limit(50).execute()
         
@@ -1524,7 +1456,7 @@ async def get_progress(
             
             if attempt_ids:
                 # Get all responses for these attempts
-                responses_response = client.table("responses")\
+                responses_response = client.table("assessment_responses")\
                     .select("question_id, score, max_score")\
                     .in_("attempt_id", attempt_ids)\
                     .execute()
@@ -1537,7 +1469,7 @@ async def get_progress(
                     
                     if question_ids:
                         # Get questions with topics
-                        questions_response = client.table("skill_assessment_questions")\
+                        questions_response = client.table("assessment_questions")\
                             .select("id, topic")\
                             .in_("id", question_ids)\
                             .execute()

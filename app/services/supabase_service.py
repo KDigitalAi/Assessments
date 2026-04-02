@@ -72,7 +72,7 @@ class SupabaseService:
             try:
                 # Try to query a table that should exist (or at least check if we can connect)
                 # This is a lightweight test that doesn't require any specific table
-                _ = self.client.table("profiles").select("id").limit(0).execute()
+                _ = self.client.table("assessment_profiles").select("id").limit(0).execute()
             except Exception as test_error:
                 # If profiles table doesn't exist, that's okay - we just want to verify connection works
                 error_msg = str(test_error).lower()
@@ -163,7 +163,7 @@ class SupabaseService:
         try:
             logger.debug(f"Fetching profile for user_id: {user_id}")
             client = self._ensure_client()
-            response = client.table("profiles").select("*").eq("id", str(user_id)).execute()
+            response = client.table("assessment_profiles").select("*").eq("id", str(user_id)).execute()
             if response.data:
                 return response.data[0]
             return None
@@ -181,7 +181,7 @@ class SupabaseService:
                 "email": email,
                 **kwargs
             }
-            response = client.table("profiles").insert(data).execute()
+            response = client.table("assessment_profiles").insert(data).execute()
             return response.data[0] if response.data else None
         except Exception as e:
             logger.error(f"Error creating profile: {str(e)}")
@@ -204,7 +204,7 @@ class SupabaseService:
             if not client:
                 key_type = "service key" if use_service_key else "anon key"
                 raise Exception(f"Supabase client ({key_type}) not initialized. Please configure Supabase credentials.")
-            response = client.table("assessments").insert(assessment_data).execute()
+            response = client.table("assessment_assessments").insert(assessment_data).execute()
             return response.data[0] if response.data else None
         except Exception as e:
             logger.error(f"Error creating assessment: {str(e)}")
@@ -224,7 +224,7 @@ class SupabaseService:
         
         try:
             client = self._ensure_client()
-            response = client.table("assessments").select("*").eq("id", str(assessment_id)).execute()
+            response = client.table("assessment_assessments").select("*").eq("id", str(assessment_id)).execute()
             result = response.data[0] if response.data else None
             
             # Cache result
@@ -240,7 +240,7 @@ class SupabaseService:
         """Update assessment and invalidate cache"""
         try:
             client = self._ensure_client()
-            response = client.table("assessments").update(update_data).eq("id", str(assessment_id)).execute()
+            response = client.table("assessment_assessments").update(update_data).eq("id", str(assessment_id)).execute()
             result = response.data[0] if response.data else None
             
             # Invalidate cache
@@ -255,7 +255,7 @@ class SupabaseService:
         """List assessments with optional filters"""
         try:
             client = self._ensure_client()
-            query = client.table("assessments").select("*")
+            query = client.table("assessment_assessments").select("*")
             
             # Optimized filter building - single pass
             if filters:
@@ -287,7 +287,7 @@ class SupabaseService:
             if "embedding" in question_data and question_data["embedding"]:
                 question_data["embedding"] = str(question_data["embedding"])
             
-            response = client.table("skill_assessment_questions").insert(question_data).execute()
+            response = client.table("assessment_questions").insert(question_data).execute()
             return response.data[0] if response.data else None
         except Exception as e:
             logger.error(f"Error creating question: {str(e)}")
@@ -305,7 +305,7 @@ class SupabaseService:
         
         try:
             client = self._ensure_client()
-            response = client.table("skill_assessment_questions").select("*").eq("id", str(question_id)).execute()
+            response = client.table("assessment_questions").select("*").eq("id", str(question_id)).execute()
             result = response.data[0] if response.data else None
             
             # Cache result
@@ -345,7 +345,7 @@ class SupabaseService:
             if uncached_ids:
                 # Use Supabase's 'in' filter for batch query
                 id_strings = [str(qid) for qid in uncached_ids]
-                response = client.table("skill_assessment_questions").select("*").in_("id", id_strings).execute()
+                response = client.table("assessment_questions").select("*").in_("id", id_strings).execute()
                 
                 # Build dictionary and cache - optimized single pass
                 cache_ttl = 600 if use_cache else None
@@ -378,7 +378,7 @@ class SupabaseService:
         
         try:
             client = self._ensure_client()
-            query = client.table("skill_assessment_questions").select("*").eq("assessment_id", str(assessment_id))
+            query = client.table("assessment_questions").select("*").eq("assessment_id", str(assessment_id))
             
             if limit:
                 query = query.limit(limit)
@@ -423,7 +423,7 @@ class SupabaseService:
         """Create a new attempt"""
         try:
             client = self._ensure_client()
-            response = client.table("attempts").insert(attempt_data).execute()
+            response = client.table("assessment_attempts").insert(attempt_data).execute()
             return response.data[0] if response.data else None
         except Exception as e:
             logger.error(f"Error creating attempt: {str(e)}")
@@ -433,7 +433,7 @@ class SupabaseService:
         """Get attempt by ID"""
         try:
             client = self._ensure_client()
-            response = client.table("attempts").select("*").eq("id", str(attempt_id)).execute()
+            response = client.table("assessment_attempts").select("*").eq("id", str(attempt_id)).execute()
             return response.data[0] if response.data else None
         except Exception as e:
             logger.error(f"Error getting attempt: {str(e)}")
@@ -443,7 +443,7 @@ class SupabaseService:
         """Update attempt"""
         try:
             client = self._ensure_client()
-            response = client.table("attempts").update(update_data).eq("id", str(attempt_id)).execute()
+            response = client.table("assessment_attempts").update(update_data).eq("id", str(attempt_id)).execute()
             return response.data[0] if response.data else None
         except Exception as e:
             logger.error(f"Error updating attempt: {str(e)}")
@@ -453,7 +453,7 @@ class SupabaseService:
         """Get attempts for a user"""
         try:
             client = self._ensure_client()
-            query = client.table("attempts").select("*").eq("user_id", str(user_id))
+            query = client.table("assessment_attempts").select("*").eq("user_id", str(user_id))
             
             if assessment_id:
                 query = query.eq("assessment_id", str(assessment_id))
@@ -472,7 +472,7 @@ class SupabaseService:
         """Create a new response"""
         try:
             client = self._ensure_client()
-            response = client.table("responses").insert(response_data).execute()
+            response = client.table("assessment_responses").insert(response_data).execute()
             return response.data[0] if response.data else None
         except Exception as e:
             logger.error(f"Error creating response: {str(e)}")
@@ -482,7 +482,7 @@ class SupabaseService:
         """Get response by ID"""
         try:
             client = self._ensure_client()
-            response = client.table("responses").select("*").eq("id", str(response_id)).execute()
+            response = client.table("assessment_responses").select("*").eq("id", str(response_id)).execute()
             return response.data[0] if response.data else None
         except Exception as e:
             logger.error(f"Error getting response: {str(e)}")
@@ -492,7 +492,7 @@ class SupabaseService:
         """Update response"""
         try:
             client = self._ensure_client()
-            response = client.table("responses").update(update_data).eq("id", str(response_id)).execute()
+            response = client.table("assessment_responses").update(update_data).eq("id", str(response_id)).execute()
             return response.data[0] if response.data else None
         except Exception as e:
             logger.error(f"Error updating response: {str(e)}")
@@ -502,7 +502,7 @@ class SupabaseService:
         """Get all responses for an attempt"""
         try:
             client = self._ensure_client()
-            response = client.table("responses").select("*").eq("attempt_id", str(attempt_id)).execute()
+            response = client.table("assessment_responses").select("*").eq("attempt_id", str(attempt_id)).execute()
             return response.data if response.data else []
         except Exception as e:
             logger.error(f"Error getting attempt responses: {str(e)}")
@@ -516,7 +516,7 @@ class SupabaseService:
         """Create a new result"""
         try:
             client = self._ensure_client()
-            response = client.table("results").insert(result_data).execute()
+            response = client.table("assessment_results").insert(result_data).execute()
             return response.data[0] if response.data else None
         except Exception as e:
             logger.error(f"Error creating result: {str(e)}")
@@ -526,7 +526,7 @@ class SupabaseService:
         """Get result by attempt ID"""
         try:
             client = self._ensure_client()
-            response = client.table("results").select("*").eq("attempt_id", str(attempt_id)).execute()
+            response = client.table("assessment_results").select("*").eq("attempt_id", str(attempt_id)).execute()
             return response.data[0] if response.data else None
         except Exception as e:
             logger.error(f"Error getting result: {str(e)}")
@@ -536,7 +536,7 @@ class SupabaseService:
         """Update result"""
         try:
             client = self._ensure_client()
-            response = client.table("results").update(update_data).eq("id", str(result_id)).execute()
+            response = client.table("assessment_results").update(update_data).eq("id", str(result_id)).execute()
             return response.data[0] if response.data else None
         except Exception as e:
             logger.error(f"Error updating result: {str(e)}")

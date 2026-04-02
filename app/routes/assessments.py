@@ -73,14 +73,14 @@ async def get_assessment_stats():
             )
         
         # Count assessments - get all and count
-        assessments_response = client.table("assessments")\
+        assessments_response = client.table("assessment_assessments")\
             .select("id")\
             .execute()
         
         assessment_count = len(assessments_response.data) if assessments_response.data else 0
         
         # Count questions - get all and count
-        questions_response = client.table("skill_assessment_questions")\
+        questions_response = client.table("assessment_questions")\
             .select("id, difficulty")\
             .execute()
         

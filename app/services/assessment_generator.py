@@ -381,7 +381,7 @@ class AssessmentGenerator:
                 batch = questions_to_store[i:i + batch_size]
                 try:
                     logger.info(f"Inserting batch {i//batch_size + 1} with {len(batch)} questions...")
-                    response = self.client.table('skill_assessment_questions').insert(batch).execute()
+                    response = self.client.table('assessment_questions').insert(batch).execute()
                     if response.data:
                         batch_ids = [q.get('id') for q in response.data]
                         inserted_ids.extend(batch_ids)
@@ -562,76 +562,12 @@ class AssessmentGenerator:
             logger.info(f"  - Coding questions: {coding_q_count}")
             logger.info(f"  - Theory questions: {theory_q_count}")
             
-            # Store questions (without source_id and source_type as per user request)
-            questions_to_store = []
+            # Store via centralized sanitizer + resilient inserter
+            # (normalizes question_type/correct_answer/options and avoids full batch failure)
             for q in all_questions:
-                questions_to_store.append({
-                    "topic": topic,
-                    "question": q.get("question", ""),
-                    "options": q.get("options", []),
-                    "correct_answer": q.get("correct_answer", ""),
-                    "explanation": q.get("explanation", ""),
-                    "difficulty": q.get("difficulty", "medium"),
-                    "question_type": q.get("question_type", "theory")  # Store question type (theory | coding)
-                    # Note: source_type and source_id are NOT stored as per user requirements
-                })
-            
-            # Store questions directly using Supabase client
-            if not self.client:
-                logger.error("Supabase client not available for storing questions")
-                return {
-                    "success": False,
-                    "error": "Supabase client not available"
-                }
-            
-            # Insert questions in batches
-            batch_size = 50
-            inserted_ids = []
-            
-            for i in range(0, len(questions_to_store), batch_size):
-                batch = questions_to_store[i:i + batch_size]
-                try:
-                    logger.info(f"Inserting batch {i//batch_size + 1} with {len(batch)} questions...")
-                    response = self.client.table('skill_assessment_questions').insert(batch).execute()
-                    if response.data:
-                        batch_ids = [q.get('id') for q in response.data]
-                        inserted_ids.extend(batch_ids)
-                        logger.info(f"[OK] Successfully inserted {len(batch_ids)} questions. IDs: {batch_ids[:3]}...")
-                    else:
-                        logger.warning(f"[WARN] Insert response has no data for batch {i//batch_size + 1}")
-                except Exception as e:
-                    error_str = str(e)
-                    # Handle case where question_type column doesn't exist in database
-                    if "question_type" in error_str.lower() and ("column" in error_str.lower() or "does not exist" in error_str.lower()):
-                        logger.warning(f"[WARN] question_type column not found, retrying without it...")
-                        # Remove question_type from batch and retry
-                        batch_without_type = []
-                        for q in batch:
-                            q_copy = q.copy()
-                            q_copy.pop("question_type", None)
-                            batch_without_type.append(q_copy)
-                        try:
-                            response = self.client.table('skill_assessment_questions').insert(batch_without_type).execute()
-                            if response.data:
-                                batch_ids = [q.get('id') for q in response.data]
-                                inserted_ids.extend(batch_ids)
-                                logger.info(f"[OK] Successfully inserted {len(batch_ids)} questions without question_type column")
-                            else:
-                                logger.warning(f"[WARN] Insert response has no data for batch {i//batch_size + 1}")
-                        except Exception as retry_error:
-                            logger.error(f"[FAILED] Error inserting questions batch {i//batch_size + 1}: {str(retry_error)}")
-                            import traceback
-                            logger.error(traceback.format_exc())
-                    else:
-                        logger.error(f"[FAILED] Error inserting questions batch {i//batch_size + 1}: {str(e)}")
-                        import traceback
-                        logger.error(traceback.format_exc())
-            
-            store_result = {
-                "success": len(inserted_ids) > 0,
-                "inserted_count": len(inserted_ids),
-                "question_ids": inserted_ids
-            }
+                q["topic"] = topic
+                q["difficulty"] = q.get("difficulty", "medium")
+            store_result = topic_question_service.store_questions(all_questions)
             
             if not store_result.get("success"):
                 logger.error(f"Failed to store questions: {store_result.get('error')}")
@@ -669,7 +605,8 @@ class AssessmentGenerator:
         difficulty: str,
         question_count: int,
         course_id: Optional[str] = None,
-        assessment_title: Optional[str] = None
+        assessment_title: Optional[str] = None,
+        source_pdf_id: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Create an assessment entry in the assessments table
@@ -716,6 +653,8 @@ class AssessmentGenerator:
                 "total_questions": question_count,
                 "question_ids": question_ids
             }
+            if source_pdf_id:
+                blueprint["source_pdf_id"] = source_pdf_id
             
             # Create assessment record
             assessment_data = {
@@ -738,7 +677,7 @@ class AssessmentGenerator:
             
             logger.info(f"Inserting assessment: {assessment_data.get('title')}")
             logger.debug(f"Assessment data: topic={topic}, question_count={question_count}, course_id={course_id}")
-            response = self.client.table("assessments").insert(assessment_data).execute()
+            response = self.client.table("assessment_assessments").insert(assessment_data).execute()
             
             if response.data and len(response.data) > 0:
                 assessment = response.data[0]
@@ -757,6 +696,137 @@ class AssessmentGenerator:
                 logger.error("SOLUTION: Ensure SUPABASE_SERVICE_KEY is set in .env file")
                 logger.error("The service key bypasses RLS policies for admin operations")
             return None
+
+    def _update_pdf_assessment_status(
+        self,
+        pdf_id: str,
+        status: str,
+        error_message: Optional[str] = None
+    ) -> None:
+        """Best-effort status tracking for assessment generation."""
+        if not self.client:
+            return
+        payload: Dict[str, Any] = {"assessment_status": status}
+        if error_message is not None:
+            payload["assessment_error_message"] = error_message
+        if status == "generated":
+            payload["assessment_generated_at"] = datetime.now(timezone.utc).isoformat()
+            payload["assessment_error_message"] = None
+        try:
+            self.client.table("pdf_documents").update(payload).eq("id", pdf_id).execute()
+        except Exception as e:
+            logger.warning(f"Could not update assessment status for PDF {pdf_id}: {str(e)}")
+
+    def _find_existing_assessment_for_pdf(self, pdf_id: str, pdf_name: str) -> Optional[Dict[str, Any]]:
+        """Idempotency guard: return existing assessment if already generated for this PDF."""
+        if not self.client:
+            return None
+        try:
+            # Fast path: exact title match
+            by_title = self.client.table("assessment_assessments")\
+                .select("id, title, blueprint")\
+                .eq("title", pdf_name)\
+                .limit(1)\
+                .execute()
+            if by_title.data:
+                return by_title.data[0]
+
+            # Fallback: inspect blueprint.source_pdf_id
+            candidates = self.client.table("assessment_assessments")\
+                .select("id, title, blueprint")\
+                .limit(1000)\
+                .execute()
+            for row in candidates.data or []:
+                blueprint = row.get("blueprint")
+                try:
+                    bp = json.loads(blueprint) if isinstance(blueprint, str) else blueprint
+                except Exception:
+                    bp = None
+                if isinstance(bp, dict) and str(bp.get("source_pdf_id")) == str(pdf_id):
+                    return row
+        except Exception as e:
+            logger.warning(f"Error checking existing assessment for PDF {pdf_id}: {str(e)}")
+        return None
+
+    def _create_fallback_questions(
+        self,
+        topic: str,
+        source_name: str,
+        count: int = 5
+    ) -> Dict[str, Any]:
+        """
+        Failsafe question creation when LLM generation fails repeatedly.
+        Guarantees at least minimal questions for assessment creation.
+        """
+        if not self.client:
+            return {"success": False, "error": "Supabase client not available"}
+
+        count = max(3, min(count, 10))
+        records = []
+        for idx in range(1, count + 1):
+            records.append({
+                "topic": topic,
+                "question": f"[Fallback] {source_name}: Core concept question {idx}",
+                "options": [
+                    "A) Concept is correctly applied",
+                    "B) Concept is partially applied",
+                    "C) Concept is unrelated",
+                    "D) Concept is undefined",
+                ],
+                "correct_answer": "A",
+                "explanation": "Fallback question generated because AI question generation failed. Replace with curated question later.",
+                "difficulty": "medium",
+                "question_type": "theory",
+            })
+        try:
+            response = self.client.table("assessment_questions").insert(records).execute()
+            ids = [q.get("id") for q in (response.data or []) if q.get("id")]
+            if not ids:
+                return {"success": False, "error": "Failed to store fallback questions"}
+            return {
+                "success": True,
+                "topic": topic,
+                "source_name": source_name,
+                "questions": records,
+                "question_ids": ids,
+                "difficulty": "medium",
+            }
+        except Exception as e:
+            return {"success": False, "error": f"Fallback insert failed: {str(e)}"}
+
+    def _generate_questions_with_retries(
+        self,
+        pdf_id: str,
+        pdf_name: str
+    ) -> Dict[str, Any]:
+        """
+        Retry LLM generation with progressively relaxed targets.
+        Never returns empty questions if fallback can be created.
+        """
+        attempts = [10, 7, 5]
+        last_error = "Unknown generation error"
+        for idx, question_count in enumerate(attempts, start=1):
+            result = self.generate_questions_for_source(
+                pdf_id=pdf_id,
+                pdf_name=pdf_name,
+                num_questions=question_count
+            )
+            if result.get("success") and result.get("question_ids"):
+                if idx > 1:
+                    logger.warning(f"Recovered question generation for {pdf_name} on retry {idx}")
+                return result
+            last_error = result.get("error", last_error)
+            logger.warning(
+                f"Question generation attempt {idx}/{len(attempts)} failed for {pdf_name}: {last_error}"
+            )
+
+        # Final failsafe
+        topic = self.extract_topic_from_source(pdf_name)
+        fallback = self._create_fallback_questions(topic=topic, source_name=pdf_name, count=5)
+        if fallback.get("success"):
+            logger.warning(f"Using fallback questions for PDF {pdf_name}")
+            return fallback
+        return {"success": False, "error": f"{last_error}; fallback failed: {fallback.get('error')}"}
     
     def generate_all_assessments(self) -> Dict[str, Any]:
         """
@@ -797,20 +867,32 @@ class AssessmentGenerator:
                 pdf_name = source.get("document_name") or source.get("pdf_title", "Unknown")
                 
                 logger.info(f"Processing PDF: {pdf_name} (ID: {pdf_id})")
-                
-                # Generate questions
-                result = self.generate_questions_for_source(
-                    pdf_id=pdf_id,
-                    pdf_name=pdf_name,
-                    num_questions=10
-                )
-                
+                self._update_pdf_assessment_status(pdf_id, "generating")
+
+                existing = self._find_existing_assessment_for_pdf(pdf_id, pdf_name)
+                if existing:
+                    self._update_pdf_assessment_status(pdf_id, "generated")
+                    generated_assessments.append({
+                        "assessment_id": existing.get("id"),
+                        "title": existing.get("title"),
+                        "topic": self.extract_topic_from_source(pdf_name),
+                        "source": pdf_name,
+                        "question_count": None,
+                        "status": "already_exists"
+                    })
+                    logger.info(f"[SKIP] Assessment already exists for PDF: {pdf_name}")
+                    continue
+
+                # Generate questions with retry + fallback (never silently skip)
+                result = self._generate_questions_with_retries(pdf_id=pdf_id, pdf_name=pdf_name)
                 if not result.get("success"):
-                    logger.warning(f"Failed to generate questions for {pdf_name}: {result.get('error')}")
+                    error = result.get("error", "Question generation failed")
+                    self._update_pdf_assessment_status(pdf_id, "failed", error)
                     failed_sources.append({
                         "source": pdf_name,
-                        "error": result.get("error")
+                        "error": error
                     })
+                    logger.error(f"Question generation hard-failed for {pdf_name}: {error}")
                     continue
                 
                 question_ids = result.get("question_ids", [])
@@ -819,10 +901,11 @@ class AssessmentGenerator:
                 question_count = len(result.get("questions", []))
                 
                 if not question_ids or question_count == 0:
-                    logger.warning(f"No questions stored for {pdf_name}")
+                    error = "Questions generated but not stored"
+                    self._update_pdf_assessment_status(pdf_id, "failed", error)
                     failed_sources.append({
                         "source": pdf_name,
-                        "error": "Questions generated but not stored"
+                        "error": error
                     })
                     continue
                 
@@ -832,7 +915,8 @@ class AssessmentGenerator:
                     source_name=pdf_name,
                     question_ids=question_ids,
                     difficulty=difficulty,
-                    question_count=question_count
+                    question_count=question_count,
+                    source_pdf_id=pdf_id
                 )
                 
                 if assessment:
@@ -843,9 +927,11 @@ class AssessmentGenerator:
                         "source": pdf_name,
                         "question_count": question_count
                     })
+                    self._update_pdf_assessment_status(pdf_id, "generated")
                     logger.info(f"[OK] Created assessment: {assessment.get('title')}")
                 else:
                     logger.warning(f"Failed to create assessment for {pdf_name}")
+                    self._update_pdf_assessment_status(pdf_id, "failed", "Assessment creation failed")
                     failed_sources.append({
                         "source": pdf_name,
                         "error": "Assessment creation failed"
